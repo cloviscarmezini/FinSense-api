@@ -23,6 +23,7 @@ services:
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin
       - S3_REGION=us-east-1
+      - AI_MANAGER_URL=http://finsense-ai-manager:8082
       - AI_ENGINE_URL=http://finsense-ai:8000
       - MODELS_DIR=/app/models
       - SWAGGER_ENABLED=true
@@ -33,6 +34,8 @@ services:
         condition: service_healthy
       finsense-storage:
         condition: service_healthy
+      finsense-ai-manager:
+        condition: service_started
     networks:
       - finsense-network
 
@@ -60,8 +63,9 @@ services:
 
   # 3. Object Storage S3-Compatível (MinIO)
   finsense-storage:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: cgr.dev/chainguard/minio:latest-dev
     container_name: finsense-storage
+    user: "0:0"
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -73,7 +77,7 @@ services:
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -82,25 +86,57 @@ services:
 
   # 4. Inicializador do Bucket MinIO
   finsense-storage-init:
-    image: minio/mc:latest
+    image: cgr.dev/chainguard/minio-client:latest-dev
     container_name: finsense-storage-init
     depends_on:
       finsense-storage:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set local http://finsense-storage:9000 minioadmin minioadmin;
-      /usr/bin/mc mb --ignore-existing local/finsense-assets;
-      /usr/bin/mc anonymous set download local/finsense-assets;
+      until mc alias set local http://finsense-storage:9000 minioadmin minioadmin; do
+        echo 'Aguardando MinIO storage inicializar...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing local/finsense-assets;
+      mc anonymous set download local/finsense-assets;
       exit 0;
       "
     networks:
       - finsense-network
 
-  # 5. Servidor de Inferência de IA (llama.cpp server para GGUF)
+  # 5. Microserviço Dedicado de Gestão de Modelos de IA (Admin Dashboard Web em :8082)
+  finsense-ai-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finsense-ai-manager
+    restart: unless-stopped
+    entrypoint: ["/app/finsense-ai-manager"]
+    ports:
+      - "8082:8082"
+    environment:
+      - ADMIN_PORT=8082
+      - ENVIRONMENT=local
+      - DATABASE_URL=postgres://finsense:finsense_secret@finsense-db:5432/finsense_db?sslmode=disable
+      - MODELS_DIR=/app/models
+      - AI_ENGINE_URL=http://finsense-ai:8000
+      - ADMIN_API_KEY=finsense_admin_secret_key_2026
+    volumes:
+      - ./models:/app/models
+      - ./web:/app/web
+    depends_on:
+      finsense-db:
+        condition: service_healthy
+    networks:
+      - finsense-network
+
+  # 6. Servidor de Inferência de IA (llama.cpp server para GGUF)
+  # Observação: requer que ao menos um modelo .gguf tenha sido baixado em ./models
   finsense-ai:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     container_name: finsense-ai
+    profiles:
+      - ai
     restart: unless-stopped
     ports:
       - "8001:8000"
@@ -112,7 +148,7 @@ services:
     networks:
       - finsense-network
 
-  # 6. Swagger UI Autônomo
+  # 7. Swagger UI Autônomo
   finsense-swagger-ui:
     image: swaggerapi/swagger-ui:latest
     container_name: finsense-swagger-ui
