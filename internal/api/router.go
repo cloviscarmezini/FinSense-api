@@ -36,6 +36,7 @@ func SetupRouter(deps *RouterDependencies) http.Handler {
 	assetsHandler := handlers.NewAssetsHandler(deps.DB, deps.StorageService)
 	backupHandler := handlers.NewBackupHandler(deps.DB)
 	aiHandler := handlers.NewAIHandler(deps.AIService)
+	txHandler := handlers.NewTransactionHandler(deps.SyncService)
 	swaggerHandler := handlers.NewSwaggerHandler("docs/openapi.json", "docs/swagger.html")
 
 	// Root & Health
@@ -69,6 +70,13 @@ func SetupRouter(deps *RouterDependencies) http.Handler {
 			protected.Post("/sync/push-pull", syncHandler.PushPull)
 			protected.Get("/sync/delta", syncHandler.Delta)
 			protected.Post("/sync/reset", syncHandler.Reset)
+
+			// Transactions & Financial Entities (Direct API Access)
+			protected.Get("/transactions", txHandler.List)
+			protected.Post("/transactions", txHandler.Create)
+			protected.Delete("/transactions/{id}", txHandler.Delete)
+			protected.Get("/accounts", txHandler.ListAccounts)
+			protected.Get("/categories", txHandler.ListCategories)
 
 			// Assets
 			protected.Post("/assets/presigned-upload", assetsHandler.PresignedUpload)

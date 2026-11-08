@@ -12,6 +12,7 @@ const (
 	OpInsert OperationType = "INSERT"
 	OpUpdate OperationType = "UPDATE"
 	OpDelete OperationType = "DELETE"
+	OpUpsert OperationType = "UPSERT"
 )
 
 type Mutation struct {
@@ -20,19 +21,27 @@ type Mutation struct {
 	EntityID   uuid.UUID              `json:"entity_id"`
 	Operation  OperationType          `json:"operation"`
 	Data       map[string]interface{} `json:"data,omitempty"`
+	Payload    map[string]interface{} `json:"payload,omitempty"`
 	Timestamp  time.Time              `json:"timestamp"`
+	UpdatedAt  *time.Time             `json:"updated_at,omitempty"`
 }
 
 type PushPullRequest struct {
-	ClientID      string     `json:"client_id"`
-	SinceRevision int64      `json:"since_revision"`
-	Mutations     []Mutation `json:"mutations"`
+	ClientID               string     `json:"client_id"`
+	SinceRevision          int64      `json:"since_revision"`
+	ClientLastSyncRevision int64      `json:"client_last_sync_revision,omitempty"`
+	Mutations              []Mutation `json:"mutations"`
 }
 
 type PushPullResponse struct {
-	LatestRevision     int64       `json:"latest_revision"`
-	AppliedMutationIDs []uuid.UUID `json:"applied_mutation_ids"`
-	ServerChanges      []Mutation  `json:"server_changes"`
+	LatestRevision          int64                    `json:"latest_revision"`
+	ServerCurrentRevision   int64                    `json:"server_current_revision"`
+	AppliedMutationIDs      []uuid.UUID              `json:"applied_mutation_ids"`
+	AcknowledgedMutationIDs []uuid.UUID              `json:"acknowledged_mutation_ids"`
+	RejectedMutations       []any                    `json:"rejected_mutations"`
+	ServerChanges           []Mutation               `json:"server_changes"`
+	Deltas                  map[string]interface{}   `json:"deltas"`
+	Tombstones              []map[string]interface{} `json:"tombstones"`
 }
 
 type SyncChangelog struct {
