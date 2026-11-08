@@ -1,0 +1,137 @@
+version: "3.9"
+
+services:
+  # 1. API Principal FinSense
+  finsense-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finsense-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENVIRONMENT=local
+      - DATABASE_URL=postgres://finsense:finsense_secret@finsense-db:5432/finsense_db?sslmode=disable
+      - JWT_SECRET=finsense_super_secret_jwt_key_local_development_2026_xyz
+      - JWT_ACCESS_EXPIRATION_MINUTES=15
+      - JWT_REFRESH_EXPIRATION_DAYS=30
+      - S3_ENDPOINT=http://finsense-storage:9000
+      - S3_PUBLIC_URL=http://localhost:9000
+      - S3_BUCKET=finsense-assets
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_REGION=us-east-1
+      - AI_ENGINE_URL=http://finsense-ai:8000
+      - MODELS_DIR=/app/models
+      - SWAGGER_ENABLED=true
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      finsense-db:
+        condition: service_healthy
+      finsense-storage:
+        condition: service_healthy
+    networks:
+      - finsense-network
+
+  # 2. Banco de Dados PostgreSQL 16
+  finsense-db:
+    image: postgres:16-alpine
+    container_name: finsense-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=finsense
+      - POSTGRES_PASSWORD=finsense_secret
+      - POSTGRES_DB=finsense_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finsense -d finsense_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finsense-network
+
+  # 3. Object Storage S3-Compatível (MinIO)
+  finsense-storage:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    container_name: finsense-storage
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finsense-network
+
+  # 4. Inicializador do Bucket MinIO
+  finsense-storage-init:
+    image: minio/mc:latest
+    container_name: finsense-storage-init
+    depends_on:
+      finsense-storage:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local http://finsense-storage:9000 minioadmin minioadmin;
+      /usr/bin/mc mb --ignore-existing local/finsense-assets;
+      /usr/bin/mc anonymous set download local/finsense-assets;
+      exit 0;
+      "
+    networks:
+      - finsense-network
+
+  # 5. Servidor de Inferência de IA (llama.cpp server para GGUF)
+  finsense-ai:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: finsense-ai
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./models:/models
+    command: >
+      --host 0.0.0.0 --port 8000
+      --ctx-size 4096 --n-gpu-layers 0
+    networks:
+      - finsense-network
+
+  # 6. Swagger UI Autônomo
+  finsense-swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    container_name: finsense-swagger-ui
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      - URL=http://localhost:8080/api/v1/openapi.json
+    depends_on:
+      - finsense-api
+    networks:
+      - finsense-network
+
+volumes:
+  pgdata:
+    driver: local
+  miniodata:
+    driver: local
+
+networks:
+  finsense-network:
+    driver: bridge

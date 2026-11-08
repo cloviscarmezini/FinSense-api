@@ -1,0 +1,738 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FinSense Core & AI Backend API",
+    "version": "2.1.0",
+    "description": "API RESTful de sincronização bidirecional offline-first e orquestração de IA para o ecossistema FinSense."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080/api/v1",
+      "description": "Servidor Local (Docker Compose)"
+    },
+    {
+      "url": "https://api.finsense.com.br/v1",
+      "description": "Servidor de Produção"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Insira o token JWT retornado pelo endpoint /auth/login."
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "status_code": { "type": "integer" },
+              "timestamp": { "type": "string", "format": "date-time" },
+              "details": { "type": "object" }
+            },
+            "required": ["code", "message", "status_code", "timestamp"]
+          }
+        },
+        "required": ["error"]
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string", "minLength": 6 },
+          "full_name": { "type": "string" }
+        },
+        "required": ["email", "password", "full_name"]
+      },
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string" }
+        },
+        "required": ["email", "password"]
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": { "type": "string" },
+          "refresh_token": { "type": "string" },
+          "token_type": { "type": "string", "example": "Bearer" },
+          "expires_in": { "type": "integer" },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "email": { "type": "string" },
+              "full_name": { "type": "string" }
+            }
+          }
+        }
+      },
+      "RefreshTokenRequest": {
+        "type": "object",
+        "properties": {
+          "refresh_token": { "type": "string" }
+        },
+        "required": ["refresh_token"]
+      },
+      "UserMeResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "email": { "type": "string" },
+          "full_name": { "type": "string" },
+          "is_active": { "type": "boolean" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Mutation": {
+        "type": "object",
+        "properties": {
+          "mutation_id": { "type": "string", "format": "uuid" },
+          "entity_name": { "type": "string" },
+          "entity_id": { "type": "string", "format": "uuid" },
+          "operation": { "type": "string", "enum": ["INSERT", "UPDATE", "DELETE"] },
+          "data": { "type": "object" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "required": ["mutation_id", "entity_name", "entity_id", "operation"]
+      },
+      "PushPullRequest": {
+        "type": "object",
+        "properties": {
+          "client_id": { "type": "string" },
+          "since_revision": { "type": "integer" },
+          "mutations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Mutation" }
+          }
+        },
+        "required": ["client_id", "since_revision"]
+      },
+      "PushPullResponse": {
+        "type": "object",
+        "properties": {
+          "latest_revision": { "type": "integer" },
+          "applied_mutation_ids": {
+            "type": "array",
+            "items": { "type": "string", "format": "uuid" }
+          },
+          "server_changes": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Mutation" }
+          }
+        }
+      },
+      "PresignedUploadRequest": {
+        "type": "object",
+        "properties": {
+          "file_name": { "type": "string" },
+          "mime_type": { "type": "string" },
+          "size_bytes": { "type": "integer" }
+        },
+        "required": ["file_name", "mime_type", "size_bytes"]
+      },
+      "PresignedUploadResponse": {
+        "type": "object",
+        "properties": {
+          "asset_id": { "type": "string", "format": "uuid" },
+          "storage_key": { "type": "string" },
+          "upload_url": { "type": "string" },
+          "expires_in_seconds": { "type": "integer" }
+        }
+      },
+      "ConfirmUploadRequest": {
+        "type": "object",
+        "properties": {
+          "asset_id": { "type": "string", "format": "uuid" },
+          "storage_key": { "type": "string" },
+          "sha256_hash": { "type": "string" }
+        },
+        "required": ["asset_id", "storage_key", "sha256_hash"]
+      },
+      "DownloadUrlResponse": {
+        "type": "object",
+        "properties": {
+          "asset_id": { "type": "string", "format": "uuid" },
+          "download_url": { "type": "string" },
+          "expires_in_seconds": { "type": "integer" }
+        }
+      },
+      "AIModelsResponse": {
+        "type": "object",
+        "properties": {
+          "selected_model_id": { "type": "string", "nullable": true },
+          "installed_models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "display_name": { "type": "string" },
+                "repo_id": { "type": "string" },
+                "file_name": { "type": "string" },
+                "size_bytes": { "type": "integer" },
+                "quantization": { "type": "string" },
+                "is_active": { "type": "boolean" },
+                "downloaded_at": { "type": "string", "format": "date-time" }
+              }
+            }
+          },
+          "suggested_models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "description": { "type": "string" },
+                "size_estimate": { "type": "string" },
+                "is_downloaded": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      },
+      "ModelDownloadRequest": {
+        "type": "object",
+        "properties": {
+          "repo_id": { "type": "string" },
+          "hugging_face_token": { "type": "string" },
+          "filename_filter": { "type": "string" }
+        },
+        "required": ["repo_id"]
+      },
+      "ModelDownloadResponse": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "format": "uuid" },
+          "status": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      },
+      "ModelDownloadStatusResponse": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "format": "uuid" },
+          "repo_id": { "type": "string" },
+          "file_name": { "type": "string" },
+          "status": { "type": "string" },
+          "progress_percentage": { "type": "number" },
+          "downloaded_bytes": { "type": "integer" },
+          "total_bytes": { "type": "integer" },
+          "speed_bytes_sec": { "type": "integer" },
+          "error_message": { "type": "string", "nullable": true }
+        }
+      },
+      "SelectModelRequest": {
+        "type": "object",
+        "properties": {
+          "model_id": { "type": "string" }
+        },
+        "required": ["model_id"]
+      },
+      "ChatCompletionsRequest": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+                "content": { "type": "string" }
+              },
+              "required": ["role", "content"]
+            }
+          },
+          "temperature": { "type": "number" },
+          "max_tokens": { "type": "integer" },
+          "stream": { "type": "boolean" }
+        },
+        "required": ["messages"]
+      },
+      "AnalyzeFinancesRequest": {
+        "type": "object",
+        "properties": {
+          "target_month": { "type": "string", "example": "2026-11" },
+          "specific_debt_id": { "type": "string", "format": "uuid", "nullable": true },
+          "specific_contract_id": { "type": "string", "format": "uuid", "nullable": true }
+        },
+        "required": ["target_month"]
+      },
+      "ParseStatementRequest": {
+        "type": "object",
+        "properties": {
+          "raw_text": { "type": "string" },
+          "default_account_id": { "type": "string", "format": "uuid" },
+          "filter_mode": { "type": "string", "default": "hybrid" }
+        },
+        "required": ["raw_text"]
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "tags": [
+    { "name": "Autenticação", "description": "Endpoints de login, registro e renovação de tokens" },
+    { "name": "Sincronização", "description": "Core Two-Way Sync (Push-Pull Delta com LWW)" },
+    { "name": "Assets", "description": "Upload e download de comprovantes via Presigned URLs" },
+    { "name": "Backup", "description": "Exportação consolidada comprimida (FCBK) e importação" },
+    { "name": "Inteligência Artificial", "description": "Gerenciamento de modelos GGUF, download do Hugging Face e inferência" }
+  ],
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Registro de nova conta de usuário",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RegisterRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Usuário registrado com sucesso",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Dados inválidos",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Autenticação de usuário",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login realizado com sucesso",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciais inválidas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Renovação de Access Token via Refresh Token",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefreshTokenRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token renovado com sucesso",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AuthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Autenticação"],
+        "summary": "Revogação da sessão atual",
+        "responses": {
+          "200": {
+            "description": "Sessão encerrada com sucesso"
+          }
+        }
+      }
+    },
+    "/user/me": {
+      "get": {
+        "tags": ["Autenticação"],
+        "summary": "Perfil e limites do usuário autenticado",
+        "responses": {
+          "200": {
+            "description": "Dados do usuário",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UserMeResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/push-pull": {
+      "post": {
+        "tags": ["Sincronização"],
+        "summary": "Core Sync: Envio de mutações locais e retorno de deltas",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PushPullRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delta de sincronização e mutações aplicadas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PushPullResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/delta": {
+      "get": {
+        "tags": ["Sincronização"],
+        "summary": "Pull puro de mutações desde since_revision",
+        "parameters": [
+          {
+            "name": "since_revision",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de mutações a partir da revisão informada"
+          }
+        }
+      }
+    },
+    "/sync/reset": {
+      "post": {
+        "tags": ["Sincronização"],
+        "summary": "Reset ou purga seletiva dos dados na nuvem",
+        "responses": {
+          "200": {
+            "description": "Base resetada com sucesso"
+          }
+        }
+      }
+    },
+    "/assets/presigned-upload": {
+      "post": {
+        "tags": ["Assets"],
+        "summary": "Gera URL pré-assinada para upload direto de arquivo no MinIO/S3",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PresignedUploadRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "URL e chave de armazenamento geradas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PresignedUploadResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assets/confirm-upload": {
+      "post": {
+        "tags": ["Assets"],
+        "summary": "Confirma integridade do upload no bucket",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ConfirmUploadRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Asset registrado e ativo"
+          }
+        }
+      }
+    },
+    "/assets/{id}/download-url": {
+      "get": {
+        "tags": ["Assets"],
+        "summary": "Obtém URL pré-assinada de leitura para exibição ou download",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "URL pré-assinada de download",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DownloadUrlResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/backup/export-full": {
+      "get": {
+        "tags": ["Backup"],
+        "summary": "Exportação consolidada de dados do usuário (FCBK)",
+        "responses": {
+          "200": {
+            "description": "Arquivo de backup binário/compactado",
+            "content": {
+              "application/octet-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/backup/import-selective": {
+      "post": {
+        "tags": ["Backup"],
+        "summary": "Importação e validação de backup granular",
+        "responses": {
+          "200": {
+            "description": "Resultado da importação granular"
+          }
+        }
+      }
+    },
+    "/ai/models": {
+      "get": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Lista catálogo de modelos sugeridos e modelos baixados no servidor",
+        "responses": {
+          "200": {
+            "description": "Status dos modelos",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AIModelsResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/models/download": {
+      "post": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Dispara download assíncrono de modelo do Hugging Face",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ModelDownloadRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Download aceito e iniciado em background",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ModelDownloadResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/models/download/{task_id}": {
+      "get": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Consulta status e progresso do download do modelo",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Progresso atual da tarefa",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ModelDownloadStatusResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/models/download/{task_id}/cancel": {
+      "post": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Cancela download de modelo em andamento",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Download cancelado com sucesso"
+          }
+        }
+      }
+    },
+    "/ai/models/select": {
+      "post": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Define o modelo ativo para inferência",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SelectModelRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Modelo selecionado com sucesso"
+          }
+        }
+      }
+    },
+    "/ai/models/{model_id}": {
+      "delete": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Exclui modelo do servidor para liberar espaço em disco",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Modelo removido com sucesso"
+          }
+        }
+      }
+    },
+    "/ai/chat/completions": {
+      "post": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Chat financeiro inteligente (JSON ou SSE Stream)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatCompletionsRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resposta do modelo de IA"
+          }
+        }
+      }
+    },
+    "/ai/analyze-finances": {
+      "post": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Diagnóstico estruturado de fluxo de caixa, dívidas e contratos",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AnalyzeFinancesRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diagnóstico financeiro e plano de ação gerados"
+          }
+        }
+      }
+    },
+    "/ai/parse-statement": {
+      "post": {
+        "tags": ["Inteligência Artificial"],
+        "summary": "Extração estruturada de transações a partir de texto bruto de extrato bancário",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ParseStatementRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lista de transações estruturadas"
+          }
+        }
+      }
+    }
+  }
+}
