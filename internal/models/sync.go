@@ -33,12 +33,17 @@ type PushPullRequest struct {
 	Mutations              []Mutation `json:"mutations"`
 }
 
+type RejectedMutation struct {
+	MutationID uuid.UUID `json:"mutation_id"`
+	Reason     string    `json:"reason"`
+}
+
 type PushPullResponse struct {
 	LatestRevision          int64                    `json:"latest_revision"`
 	ServerCurrentRevision   int64                    `json:"server_current_revision"`
 	AppliedMutationIDs      []uuid.UUID              `json:"applied_mutation_ids"`
 	AcknowledgedMutationIDs []uuid.UUID              `json:"acknowledged_mutation_ids"`
-	RejectedMutations       []any                    `json:"rejected_mutations"`
+	RejectedMutations       []RejectedMutation       `json:"rejected_mutations"`
 	ServerChanges           []Mutation               `json:"server_changes"`
 	Deltas                  map[string]interface{}   `json:"deltas"`
 	Tombstones              []map[string]interface{} `json:"tombstones"`

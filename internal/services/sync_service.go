@@ -77,6 +77,8 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 	}
 
 	appliedIDs := make([]uuid.UUID, 0, len(req.Mutations))
+	ackIDs := make([]uuid.UUID, 0, len(req.Mutations))
+	rejectedMutations := make([]models.RejectedMutation, 0)
 
 	for _, m := range req.Mutations {
 		// Normalization of fields
@@ -102,13 +104,25 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 		}
 
 		if exists {
+			ackIDs = append(ackIDs, m.MutationID)
 			appliedIDs = append(appliedIDs, m.MutationID)
 			continue
 		}
 
+		// Savepoint per mutation to isolate individual failures
+		_, err = tx.Exec(ctx, "SAVEPOINT mut_sp")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create savepoint: %w", err)
+		}
+
 		// Apply mutation based on entity type and operation
 		if err := s.applyMutation(ctx, tx, userID, m); err != nil {
-			return nil, fmt.Errorf("failed to apply mutation %s on entity %s: %w", m.MutationID, m.EntityName, err)
+			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT mut_sp")
+			rejectedMutations = append(rejectedMutations, models.RejectedMutation{
+				MutationID: m.MutationID,
+				Reason:     err.Error(),
+			})
+			continue
 		}
 
 		// Record in changelog with valid constraint check (INSERT, UPDATE, DELETE)
@@ -117,10 +131,17 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 		`, userID, req.ClientID, m.EntityName, m.EntityID, opStr, m.MutationID, time.Now().UTC())
 		if err != nil {
-			return nil, fmt.Errorf("failed to insert changelog: %w", err)
+			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT mut_sp")
+			rejectedMutations = append(rejectedMutations, models.RejectedMutation{
+				MutationID: m.MutationID,
+				Reason:     err.Error(),
+			})
+			continue
 		}
 
+		_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT mut_sp")
 		appliedIDs = append(appliedIDs, m.MutationID)
+		ackIDs = append(ackIDs, m.MutationID)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -137,8 +158,8 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 		LatestRevision:          latestRev,
 		ServerCurrentRevision:   latestRev,
 		AppliedMutationIDs:      appliedIDs,
-		AcknowledgedMutationIDs: appliedIDs,
-		RejectedMutations:       []any{},
+		AcknowledgedMutationIDs: ackIDs,
+		RejectedMutations:       rejectedMutations,
 		ServerChanges:           serverChanges,
 		Deltas:                  deltas,
 		Tombstones:              tombstones,
@@ -342,6 +363,72 @@ func (s *SyncService) GetDelta(ctx context.Context, userID uuid.UUID, clientID s
 	return changes, currentLatest, err
 }
 
+// getOrFallbackAccount returns accountID if valid, or falls back to user's first account, or creates a default one
+func (s *SyncService) getOrFallbackAccount(ctx context.Context, tx pgx.Tx, userID uuid.UUID, accountID uuid.UUID) (uuid.UUID, error) {
+	if accountID != uuid.Nil {
+		var exists bool
+		err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", accountID, userID).Scan(&exists)
+		if err == nil && exists {
+			return accountID, nil
+		}
+	}
+	var fallbackID uuid.UUID
+	err := tx.QueryRow(ctx, "SELECT id FROM bank_accounts WHERE user_id = $1 AND deleted_at IS NULL ORDER BY display_order ASC, created_at ASC LIMIT 1", userID).Scan(&fallbackID)
+	if err == nil {
+		return fallbackID, nil
+	}
+
+	fallbackID = uuid.New()
+	now := time.Now().UTC()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO bank_accounts (id, user_id, name, bank_preset_id, icon_symbol, color_hex, initial_balance, agency, account_number, display_order, created_at, updated_at)
+		VALUES ($1, $2, 'Conta Principal', 'itau', 'building.columns.fill', '#EC7000', 0, '', '', 0, $3, $3)
+	`, fallbackID, userID, now)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to create fallback account: %w", err)
+	}
+	return fallbackID, nil
+}
+
+// getOrFallbackCategory returns categoryID if valid, or falls back to user's category matching type, or creates a default one
+func (s *SyncService) getOrFallbackCategory(ctx context.Context, tx pgx.Tx, userID uuid.UUID, categoryID uuid.UUID, catType string) (uuid.UUID, error) {
+	if categoryID != uuid.Nil {
+		var exists bool
+		err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", categoryID, userID).Scan(&exists)
+		if err == nil && exists {
+			return categoryID, nil
+		}
+	}
+	if catType == "" {
+		catType = "expense"
+	}
+	var fallbackID uuid.UUID
+	err := tx.QueryRow(ctx, "SELECT id FROM categories WHERE user_id = $1 AND type = $2 AND deleted_at IS NULL ORDER BY display_order ASC, created_at ASC LIMIT 1", userID, catType).Scan(&fallbackID)
+	if err == nil {
+		return fallbackID, nil
+	}
+
+	err = tx.QueryRow(ctx, "SELECT id FROM categories WHERE user_id = $1 AND deleted_at IS NULL ORDER BY display_order ASC, created_at ASC LIMIT 1", userID).Scan(&fallbackID)
+	if err == nil {
+		return fallbackID, nil
+	}
+
+	fallbackID = uuid.New()
+	now := time.Now().UTC()
+	catName := "Geral"
+	if catType == "income" {
+		catName = "Outras Receitas"
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO categories (id, user_id, name, type, icon_symbol, color_hex, is_system_default, display_order, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'tag.fill', '#6366F1', true, 0, $5, $5)
+	`, fallbackID, userID, catName, catType, now)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to create fallback category: %w", err)
+	}
+	return fallbackID, nil
+}
+
 // applyMutation executes insert/update/delete according to entity name
 func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.UUID, m models.Mutation) error {
 	now := time.Now().UTC()
@@ -431,6 +518,47 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.StatementOccurrenceIndex = 1
 		}
 
+		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
+		if err != nil {
+			return fmt.Errorf("account validation failed: %w", err)
+		}
+		item.AccountID = accID
+
+		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, item.Type)
+		if err != nil {
+			return fmt.Errorf("category validation failed: %w", err)
+		}
+		item.CategoryID = catID
+
+		if item.LinkedContractID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM credit_contracts WHERE id = $1 AND user_id = $2)", *item.LinkedContractID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedContractID = nil
+			}
+		}
+		if item.LinkedInvestmentID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM investment_items WHERE id = $1 AND user_id = $2)", *item.LinkedInvestmentID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedInvestmentID = nil
+			}
+		}
+		if item.LinkedDebtID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM debt_items WHERE id = $1 AND user_id = $2)", *item.LinkedDebtID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedDebtID = nil
+			}
+		}
+		if item.LinkedQuotaID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM category_quota_rules WHERE id = $1 AND user_id = $2)", *item.LinkedQuotaID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedQuotaID = nil
+			}
+		}
+
 		query := `
 			INSERT INTO financial_transactions (
 				id, user_id, account_id, category_id, name, details, amount, date, type, is_paid,
@@ -470,7 +598,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE financial_transactions.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query,
+		_, err = tx.Exec(ctx, query,
 			item.ID, item.UserID, item.AccountID, item.CategoryID, item.Name, item.Details, item.Amount, item.Date, item.Type, item.IsPaid,
 			item.AttachmentPath, item.AttachmentName, item.IgnoreInConsolidated, item.RecurrenceMode, item.RecurrenceFrequency,
 			item.IsCanceledRecurringSeries, item.SeriesGroupID, item.InstallmentIndex, item.InstallmentTotal,
@@ -487,6 +615,20 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		var item models.DebtItem
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
 			return err
+		}
+		if item.PaidFromAccountID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", *item.PaidFromAccountID, userID).Scan(&exists)
+			if !exists {
+				item.PaidFromAccountID = nil
+			}
+		}
+		if item.PaymentTransactionID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM financial_transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", *item.PaymentTransactionID, userID).Scan(&exists)
+			if !exists {
+				item.PaymentTransactionID = nil
+			}
 		}
 		query := `
 			INSERT INTO debt_items (id, user_id, name, custom_image_path, bank_preset_id, icon_symbol, color_hex, original_amount, contracted_date, notes, is_paid, negotiated_amount, paid_date, paid_from_account_id, payment_transaction_id, created_at, updated_at)
@@ -521,6 +663,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
 			return err
 		}
+		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.InvestmentAccountID)
+		if err != nil {
+			return fmt.Errorf("investment account validation failed: %w", err)
+		}
+		item.InvestmentAccountID = accID
+
 		query := `
 			INSERT INTO investment_items (id, user_id, investment_account_id, name, group_name, balance, show_in_consolidated, icon_symbol, color_hex, notes, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -537,7 +685,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE investment_items.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query, m.EntityID, userID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, now, now)
+		_, err = tx.Exec(ctx, query, m.EntityID, userID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, now, now)
 		return err
 
 	case "credit_contracts":
@@ -549,6 +697,26 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
 			return err
 		}
+		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
+		if err != nil {
+			return fmt.Errorf("credit contract account validation failed: %w", err)
+		}
+		item.AccountID = accID
+
+		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
+		if err != nil {
+			return fmt.Errorf("credit contract category validation failed: %w", err)
+		}
+		item.CategoryID = catID
+
+		if item.SettledAccountID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", *item.SettledAccountID, userID).Scan(&exists)
+			if !exists {
+				item.SettledAccountID = nil
+			}
+		}
+
 		query := `
 			INSERT INTO credit_contracts (
 				id, user_id, account_id, category_id, kind, name, contract_number, loan_subtype, financing_subtype,
@@ -584,7 +752,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE credit_contracts.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query,
+		_, err = tx.Exec(ctx, query,
 			m.EntityID, userID, item.AccountID, item.CategoryID, item.Kind, item.Name, item.ContractNumber, item.LoanSubtype, item.FinancingSubtype,
 			item.AmortizationSystem, item.TotalContractedAmount, item.OutstandingBalance, item.InstallmentAmount, item.BillingDay,
 			item.TotalInstallments, item.MonthlyInterestRate, item.StartDate, item.PastInstallmentsElapsedAtCreation,
@@ -601,6 +769,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
 			return err
 		}
+		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
+		if err != nil {
+			return fmt.Errorf("provision category validation failed: %w", err)
+		}
+		item.CategoryID = catID
+
 		query := `
 			INSERT INTO category_provisions (id, user_id, category_id, year, month, estimated_amount, repeat_for_future_months, monthly_overrides, excluded_year_month_keys, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -616,7 +790,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE category_provisions.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query, m.EntityID, userID, item.CategoryID, item.Year, item.Month, item.EstimatedAmount, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, now, now)
+		_, err = tx.Exec(ctx, query, m.EntityID, userID, item.CategoryID, item.Year, item.Month, item.EstimatedAmount, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, now, now)
 		return err
 
 	case "category_quota_rules":
@@ -628,6 +802,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
 			return err
 		}
+		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
+		if err != nil {
+			return fmt.Errorf("quota category validation failed: %w", err)
+		}
+		item.CategoryID = catID
+
 		query := `
 			INSERT INTO category_quota_rules (id, series_id, user_id, category_id, name, icon_symbol, year, month, planned_quantity, estimated_unit_price, repeat_for_future_months, monthly_overrides, excluded_year_month_keys, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
@@ -647,7 +827,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE category_quota_rules.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query, m.EntityID, item.SeriesID, userID, item.CategoryID, item.Name, item.IconSymbol, item.Year, item.Month, item.PlannedQuantity, item.EstimatedUnitPrice, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, now, now)
+		_, err = tx.Exec(ctx, query, m.EntityID, item.SeriesID, userID, item.CategoryID, item.Name, item.IconSymbol, item.Year, item.Month, item.PlannedQuantity, item.EstimatedUnitPrice, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, now, now)
 		return err
 
 	default:
@@ -729,6 +909,18 @@ func (s *SyncService) CreateTransaction(ctx context.Context, userID uuid.UUID, t
 		return nil, err
 	}
 	defer conn.Rollback(ctx)
+
+	accID, err := s.getOrFallbackAccount(ctx, conn, userID, tx.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("account validation failed: %w", err)
+	}
+	tx.AccountID = accID
+
+	catID, err := s.getOrFallbackCategory(ctx, conn, userID, tx.CategoryID, tx.Type)
+	if err != nil {
+		return nil, fmt.Errorf("category validation failed: %w", err)
+	}
+	tx.CategoryID = catID
 
 	query := `
 		INSERT INTO financial_transactions (
