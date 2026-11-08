@@ -47,15 +47,13 @@ system_manifest:
 | `GET` | `/assets/:id/download-url` | Bearer Token | Emissão de URL pré-assinada de leitura para download/exibição |
 | `GET` | `/backup/export-full` | Bearer Token | Download de arquivo de backup binário LZFSE (`FCBK`) |
 | `POST` | `/backup/import-selective`| Bearer Token | Importação e validação de backup granular |
-| `GET` | `/ai/models` | Bearer Token | **IA**: Lista catálogo sugerido e modelos baixados no servidor |
-| `POST` | `/ai/models/download` | Bearer Token | **IA**: Dispara download assíncrono de modelo do Hugging Face |
-| `GET` | `/ai/models/download/:task_id`| Bearer Token | **IA**: Consulta status e progresso do download do modelo |
-| `POST` | `/ai/models/download/:task_id/cancel`| Bearer Token | **IA**: Cancela download de modelo em andamento |
-| `POST` | `/ai/models/select` | Bearer Token | **IA**: Define o modelo ativo para inferência |
-| `DELETE`| `/ai/models/:model_id` | Bearer Token | **IA**: Exclui modelo do servidor para liberar espaço em disco |
-| `POST` | `/ai/chat/completions` | Bearer Token | **IA**: Chat financeiro (suporte a SSE streaming e JSON) |
-| `POST` | `/ai/analyze-finances` | Bearer Token | **IA**: Diagnóstico estruturado de fluxo, dívidas e contratos |
-| `POST` | `/ai/parse-statement` | Bearer Token | **IA**: Extração estruturada de transações de extrato/OCR |
+| `POST` | `/ai/chat/completions` | Bearer Token | **IA (App)**: Chat financeiro contextualizado estritamente aos dados do usuário |
+| `POST` | `/ai/analyze-finances` | Bearer Token | **IA (App)**: Diagnóstico estruturado de fluxo, dívidas e contratos |
+| `POST` | `/ai/parse-statement` | Bearer Token | **IA (App)**: Extração estruturada de transações de extrato/OCR |
+| `GET` | `:8082/` ou `:8082/admin` | Admin | **AI Manager**: Dashboard Web para download e gestão global de modelos |
+| `GET` | `:8082/api/admin/models` | Admin | **AI Manager**: Lista catálogo e modelos baixados |
+| `POST` | `:8082/api/admin/models/download` | Admin | **AI Manager**: Inicia download assíncrono de modelo GGUF |
+| `POST` | `:8082/api/admin/models/select` | Admin | **AI Manager**: Define o modelo ativo global do sistema |
 
 ---
 
@@ -74,10 +72,16 @@ docker compose up -d
 +----------------------------------------------------------------------------------------+
 |                                REDE DOCKER: finsense-network                           |
 |                                                                                        |
-|  [finsense-api] (Porta 8080)                                                           |
+|  [finsense-ai-manager] (Porta 8082) <--- EXCLUSIVO ADMIN                                 |
+|    ├── Frontend Web Dashboard (http://localhost:8082/)                                 |
+|    ├── Gestão Global de Modelos (Download HF, Progresso, Cancelamento, Seleção, Delete)|
+|    └── Informa o modelo ativo global para todas as instâncias                          |
+|                                                                                        |
+|  [finsense-api] (Porta 8080) <--- APPS MÓVEIS / CLIENTES                                |
 |    ├── Conecta em finsense-db:5432 (PostgreSQL 16)                                     |
 |    ├── Conecta em finsense-storage:9000 (MinIO S3)                                     |
-|    ├── Conecta em finsense-ai:8000 (llama.cpp server)                                  |
+|    ├── Conecta em finsense-ai-manager:8082 (Consulta modelo ativo)                     |
+|    ├── Chat estritamente contextualizado às finanças isoladas do usuário logado        |
 |    └── Serve Swagger UI em http://localhost:8080/docs                                  |
 |                                                                                        |
 |  [finsense-db] (Porta 5432)                                                            |
@@ -85,9 +89,6 @@ docker compose up -d
 |                                                                                        |
 |  [finsense-storage] (Portas 9000 S3 / 9001 Console Web)                                |
 |    └── MinIO S3 compatível com auto-criação do bucket 'finsense-assets'                |
-|                                                                                        |
-|  [finsense-ai] (Porta 8001 / interna 8000)                                             |
-|    └── Servidor de inferência GGUF montando o volume compartilhado ./models            |
 |                                                                                        |
 |  [finsense-swagger-ui] (Porta 8081)                                                    |
 |    └── Interface Swagger UI autônoma espelhando /api/v1/openapi.json                  |
@@ -163,8 +164,9 @@ services:
 
   # 3. Object Storage S3-Compatível (MinIO)
   finsense-storage:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: cgr.dev/chainguard/minio:latest-dev
     container_name: finsense-storage
+    user: "0:0"
     restart: unless-stopped
     ports:
       - "9000:9000"
@@ -176,7 +178,7 @@ services:
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -185,25 +187,56 @@ services:
 
   # 4. Inicializador do Bucket MinIO
   finsense-storage-init:
-    image: minio/mc:latest
+    image: cgr.dev/chainguard/minio-client:latest-dev
     container_name: finsense-storage-init
     depends_on:
       finsense-storage:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set local http://finsense-storage:9000 minioadmin minioadmin;
-      /usr/bin/mc mb --ignore-existing local/finsense-assets;
-      /usr/bin/mc anonymous set download local/finsense-assets;
+      until mc alias set local http://finsense-storage:9000 minioadmin minioadmin; do
+        echo 'Aguardando MinIO storage inicializar...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing local/finsense-assets;
+      mc anonymous set download local/finsense-assets;
       exit 0;
       "
     networks:
       - finsense-network
 
-  # 5. Servidor de Inferência de IA (llama.cpp server para GGUF)
+  # 5. Microserviço Dedicado de Gestão de Modelos de IA (Admin Dashboard Web em :8082)
+  finsense-ai-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finsense-ai-manager
+    restart: unless-stopped
+    entrypoint: ["/app/finsense-ai-manager"]
+    ports:
+      - "8082:8082"
+    environment:
+      - ADMIN_PORT=8082
+      - ENVIRONMENT=local
+      - DATABASE_URL=postgres://finsense:finsense_secret@finsense-db:5432/finsense_db?sslmode=disable
+      - MODELS_DIR=/app/models
+      - AI_ENGINE_URL=http://finsense-ai:8000
+      - ADMIN_API_KEY=finsense_admin_secret_key_2026
+    volumes:
+      - ./models:/app/models
+      - ./web:/app/web
+    depends_on:
+      finsense-db:
+        condition: service_healthy
+    networks:
+      - finsense-network
+
+  # 6. Servidor de Inferência de IA (llama.cpp server para GGUF)
   finsense-ai:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     container_name: finsense-ai
+    profiles:
+      - ai
     restart: unless-stopped
     ports:
       - "8001:8000"
@@ -215,7 +248,7 @@ services:
     networks:
       - finsense-network
 
-  # 6. Swagger UI Autônomo
+  # 7. Swagger UI Autônomo
   finsense-swagger-ui:
     image: swaggerapi/swagger-ui:latest
     container_name: finsense-swagger-ui
@@ -688,28 +721,34 @@ CREATE TABLE chat_messages (
 
 ---
 
-## 5. Especificação Estrita de Endpoints de Inteligência Artificial (AI Engine)
+## 5. Especificação Estrita de Inteligência Artificial (AI Engine & Microserviço de Gestão)
 
-O backend FinSense atua como o servidor de inferência e orquestrador de IA, permitindo que clientes móveis consumam inteligência avançada sem rodar LLMs localmente.
+A gestão e o ciclo de vida dos modelos de IA residem em um **microserviço dedicado exclusivo para administradores (`finsense-ai-manager`, porta 8082)**, com **Frontend Web Dashboard** próprio. Os usuários finais nos aplicativos móveis não possuem opção de escolha de modelo; a API de Chat consome automaticamente o modelo ativo global, enriquecido com o contexto financeiro isolado do usuário logado.
 
 ```
-+-------------------------------------------------------------------------------+
-|                       ARQUITETURA DO BACKEND AI ENGINE                        |
-|                                                                               |
-|  [Hugging Face Hub API] <--- Download Task ---> [Local Model Storage (.gguf)] |
-|                                                                               |
-|  [Client App] ---> POST /ai/chat/completions ---> [Llama.cpp / vLLM Server]   |
-|                                                          ^                    |
-|  [Context Builder] (Contas + Extratos + Contratos) ------|                    |
-+-------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------+
+|                                    ARQUITETURA DO CLUSTER DE IA                                       |
+|                                                                                                        |
+|  [Admin Web Dashboard :8082] ───> [finsense-ai-manager] ─── Download ───> [Volume ./models (.gguf)]   |
+|                                          │                                                             |
+|                                          │ Informa o modelo ativo global                               |
+|                                          ▼                                                             |
+|  [App Móvel] ─── POST /api/v1/ai/chat/completions ───> [finsense-api :8080]                           |
+|                                                              │                                         |
+|                                                              │ Context Builder (Saldo, Dívidas do user)|
+|                                                              ▼                                         |
+|                                                        [Inferência LLM]                                |
++--------------------------------------------------------------------------------------------------------+
 ```
 
 ---
 
-### 5.1. `GET /api/v1/ai/models`
-Retorna a lista de modelos suportados/sugeridos pelo FinSense e o estado atual de instalação no servidor para o usuário autenticado.
+### 5.1. Endpoints Administrativos de Gestão de Modelos (`finsense-ai-manager:8082`)
 
-- **Headers**: `Authorization: Bearer <JWT_TOKEN>`
+#### `GET /api/admin/models` (ou Dashboard Web em `http://localhost:8082/`)
+Retorna a lista de modelos suportados/sugeridos pelo FinSense e o estado atual de instalação no servidor global.
+
+- **Acesso**: Exclusivo Administradores (Dashboard Web ou Token de Admin)
 - **Response 200 OK**:
 ```json
 {
@@ -754,16 +793,15 @@ Retorna a lista de modelos suportados/sugeridos pelo FinSense e o estado atual d
 
 ---
 
-### 5.2. `POST /api/v1/ai/models/download`
-Inicia um processo assíncrono em segundo plano no servidor para baixar o arquivo GGUF diretamente dos repositórios do Hugging Face.
+### 5.2. `POST /api/admin/models/download`
+Inicia um processo assíncrono em segundo plano no microserviço para baixar o arquivo GGUF diretamente dos repositórios do Hugging Face.
 
-- **Headers**: `Authorization: Bearer <JWT_TOKEN>`, `Content-Type: application/json`
 - **Request Body**:
 ```json
 {
-  "repo_id": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-  "hugging_face_token": "hf_xxxxxxxxxxxxxxxxxxxxxx",
-  "filename_filter": "q4_k_m"
+  "repo_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+  "hugging_face_token": "",
+  "filename_filter": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 }
 ```
 - **Response 202 Accepted**:
@@ -771,26 +809,25 @@ Inicia um processo assíncrono em segundo plano no servidor para baixar o arquiv
 {
   "task_id": "9b1d6f2c-6d32-47a1-8894-67d0c5311f5e",
   "status": "PENDING",
-  "message": "Download do modelo iniciado no servidor."
+  "message": "Download do modelo iniciado com sucesso no cluster de IA."
 }
 ```
 
 ---
 
-### 5.3. `GET /api/v1/ai/models/download/:task_id`
+### 5.3. `GET /api/admin/models/download/:task_id`
 Consulta o progresso e a taxa de transferência em tempo real do download do modelo no servidor.
 
-- **Headers**: `Authorization: Bearer <JWT_TOKEN>`
 - **Response 200 OK**:
 ```json
 {
   "task_id": "9b1d6f2c-6d32-47a1-8894-67d0c5311f5e",
-  "repo_id": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-  "file_name": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+  "repo_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+  "file_name": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
   "status": "DOWNLOADING",
   "progress_percentage": 45.8,
   "downloaded_bytes": 503800000,
-  "total_bytes": 1100000000,
+  "total_bytes": 2000000000,
   "speed_bytes_sec": 12500000,
   "error_message": null
 }
@@ -798,10 +835,9 @@ Consulta o progresso e a taxa de transferência em tempo real do download do mod
 
 ---
 
-### 5.4. `POST /api/v1/ai/models/download/:task_id/cancel`
+### 5.4. `POST /api/admin/models/download/:task_id/cancel`
 Cancela a tarefa de download e purga arquivos temporários parciais no disco do servidor.
 
-- **Headers**: `Authorization: Bearer <JWT_TOKEN>`
 - **Response 200 OK**:
 ```json
 {
@@ -813,30 +849,29 @@ Cancela a tarefa de download e purga arquivos temporários parciais no disco do 
 
 ---
 
-### 5.5. `POST /api/v1/ai/models/select`
-Define o modelo que responderá às chamadas de chat e diagnósticos do usuário.
+### 5.5. `POST /api/admin/models/select`
+**Define o modelo ativo global do sistema**. A partir desta chamada, todas as mensagens de chat dos usuários em qualquer aplicativo usarão este modelo.
 
-- **Headers**: `Authorization: Bearer <JWT_TOKEN>`, `Content-Type: application/json`
 - **Request Body**:
 ```json
 {
-  "model_id": "Qwen/Qwen2.5-3B-Instruct-GGUF"
+  "model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF"
 }
 ```
 - **Response 200 OK**:
 ```json
 {
-  "selected_model_id": "Qwen/Qwen2.5-3B-Instruct-GGUF",
-  "is_active": true
+  "selected_model_id": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+  "is_global_active": true,
+  "message": "Modelo ativo global atualizado. Todas as chamadas de chat agora usarão este modelo."
 }
 ```
 
 ---
 
-### 5.6. `DELETE /api/v1/ai/models/:model_id`
+### 5.6. `DELETE /api/admin/models/:model_id`
 Remove fisicamente o modelo GGUF do disco do servidor.
 
-- **Headers**: `Authorization: Bearer <JWT_TOKEN>`
 - **Response 200 OK**:
 ```json
 {
@@ -847,8 +882,15 @@ Remove fisicamente o modelo GGUF do disco do servidor.
 
 ---
 
-### 5.7. `POST /api/v1/ai/chat/completions`
-Executa a inferência de conversação financeira. Suporta resposta em bloco (`application/json`) e streaming Server-Sent Events (`text/event-stream`).
+### 5.7. Endpoints de IA para o Usuário Final (Client Apps em `:8080/api/v1/ai/...`)
+
+#### `POST /api/v1/ai/chat/completions`
+Executa o chat financeiro. A API `finsense-api`:
+1. Autentica o usuário pelo Bearer Token.
+2. Carrega as contas bancárias, dívidas, faturas e movimentações **estritamente do usuário logado**.
+3. Injeta esses dados financeiros como contexto de sistema.
+4. Consulta e executa a inferência usando o **modelo ativo global** configurado no `finsense-ai-manager`.
+5. Salva o histórico de mensagens exclusivamente associado ao `user_id` do usuário.
 
 - **Headers**:
   - `Authorization: Bearer <JWT_TOKEN>`

@@ -12,10 +12,16 @@ O backend do FinSense foi projetado para operar com tolerância a falhas, suport
 +----------------------------------------------------------------------------------------+
 |                                REDE DOCKER: finsense-network                           |
 |                                                                                        |
-|  [finsense-api] (Porta 8080)                                                           |
+|  [finsense-ai-manager] (Porta 8082) <--- EXCLUSIVO ADMIN                                 |
+|    ├── Frontend Web Dashboard (http://localhost:8082/)                                 |
+|    ├── Gestão Global de Modelos (Download HF, Progresso, Cancelamento, Seleção, Delete)|
+|    └── Informa o modelo ativo global e gerencia a inferência                           |
+|                                                                                        |
+|  [finsense-api] (Porta 8080) <--- USADO PELOS CLIENTES / APPS                           |
 |    ├── Conecta em finsense-db:5432 (PostgreSQL 16)                                     |
 |    ├── Conecta em finsense-storage:9000 (MinIO S3)                                     |
-|    ├── Conecta em finsense-ai:8000 (llama.cpp server)                                  |
+|    ├── Conecta em finsense-ai-manager:8082 (Consulta Modelo Ativo Global)              |
+|    ├── Chat com Contexto Isolado do Usuário Logado (Saldo, Contas, Dívidas)            |
 |    └── Serve Swagger UI em http://localhost:8080/docs                                  |
 |                                                                                        |
 |  [finsense-db] (Porta 5432)                                                            |
@@ -23,9 +29,6 @@ O backend do FinSense foi projetado para operar com tolerância a falhas, suport
 |                                                                                        |
 |  [finsense-storage] (Portas 9000 S3 / 9001 Console Web)                                |
 |    └── MinIO S3 compatível com auto-criação do bucket 'finsense-assets'                |
-|                                                                                        |
-|  [finsense-ai] (Porta 8001 / interna 8000)                                             |
-|    └── Servidor de inferência GGUF montando o volume compartilhado ./models            |
 |                                                                                        |
 |  [finsense-swagger-ui] (Porta 8081)                                                    |
 |    └── Interface Swagger UI autônoma espelhando /api/v1/openapi.json                  |
@@ -36,18 +39,19 @@ O backend do FinSense foi projetado para operar com tolerância a falhas, suport
 
 ## 2. Inicialização Rápida (100% Docker)
 
-Com apenas um comando, todo o ambiente sobe automaticamente (banco, storage S3, servidor de IA, Swagger UI e API em Go):
+Com apenas um comando, todo o ambiente sobe automaticamente (banco, storage S3, microserviço de IA com dashboard, Swagger UI e API em Go):
 
 ```bash
 docker compose up -d
 ```
 
 ### URLs de Acesso Local
-- **API Base**: [http://localhost:8080/api/v1](http://localhost:8080/api/v1)
-- **Healthcheck**: [http://localhost:8080/health](http://localhost:8080/health)
+- **API Principal (Apps Móveis)**: [http://localhost:8080/api/v1](http://localhost:8080/api/v1)
+- **Painel Web de Gestão de Modelos de IA (Admin)**: [http://localhost:8082/](http://localhost:8082/)
 - **Swagger UI (Embutido)**: [http://localhost:8080/docs](http://localhost:8080/docs)
 - **Swagger UI (Container Standalone)**: [http://localhost:8081](http://localhost:8081)
 - **OpenAPI 3.1 JSON**: [http://localhost:8080/api/v1/openapi.json](http://localhost:8080/api/v1/openapi.json)
+- **MinIO Console**: [http://localhost:9001](http://localhost:9001) (Usuário: `minioadmin` / Senha: `minioadmin`)
 - **MinIO Console**: [http://localhost:9001](http://localhost:9001) (Usuário: `minioadmin` / Senha: `minioadmin`)
 
 ---
@@ -83,18 +87,25 @@ docker compose up -d
 | `GET` | `/api/v1/backup/export-full` | Bearer Token | Exportação completa dos dados do usuário em JSON consolidado |
 | `POST` | `/api/v1/backup/import-selective` | Bearer Token | Importação e validação de backup granular |
 
-### Inteligência Artificial (AI Engine)
+### Inteligência Artificial (AI Engine para Apps Móveis - 100% Contexto Isolado do Usuário)
 | Método | Caminho | Autenticação | Descrição |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/v1/ai/models` | Bearer Token | Catálogo sugerido e modelos GGUF baixados no servidor |
-| `POST` | `/api/v1/ai/models/download` | Bearer Token | Disparo assíncrono de download do Hugging Face |
-| `GET` | `/api/v1/ai/models/download/:task_id` | Bearer Token | Consulta de progresso e velocidade de download |
-| `POST` | `/api/v1/ai/models/download/:task_id/cancel` | Bearer Token | Cancelamento de download em andamento |
-| `POST` | `/api/v1/ai/models/select` | Bearer Token | Definição do modelo ativo para inferência |
-| `DELETE` | `/api/v1/ai/models/:model_id` | Bearer Token | Remoção de modelo do disco |
-| `POST` | `/api/v1/ai/chat/completions` | Bearer Token | Chat financeiro inteligente com contexto |
+| `POST` | `/api/v1/ai/chat/completions` | Bearer Token | Chat financeiro inteligente com injeção automática e isolada do contexto financeiro do usuário logado (usando o modelo global ativo) |
 | `POST` | `/api/v1/ai/analyze-finances` | Bearer Token | Diagnóstico analítico de fluxo de caixa e amortização de dívidas |
 | `POST` | `/api/v1/ai/parse-statement` | Bearer Token | Extração estruturada de transações de extrato/OCR |
+
+### Gestão Global de Modelos de IA (Microserviço Administrativo Dedicado em `:8082`)
+> **Acesso Exclusivo para Administradores / Dashboard Web:** [http://localhost:8082/](http://localhost:8082/)
+
+| Método | Caminho | Finalidade |
+| :--- | :--- | :--- |
+| `GET` | `/` ou `/admin` | **Dashboard Web**: Interface gráfica para download, status, seleção de modelo ativo e exclusão |
+| `GET` | `/api/admin/models` | Lista catálogo sugerido e modelos GGUF baixados no servidor |
+| `POST` | `/api/admin/models/download` | Disparo assíncrono de download do Hugging Face para o storage global |
+| `GET` | `/api/admin/models/download/:task_id` | Consulta de progresso e velocidade de download em tempo real |
+| `POST` | `/api/admin/models/download/:task_id/cancel` | Cancelamento de download em andamento |
+| `POST` | `/api/admin/models/select` | **Define o modelo ativo global do sistema** (utilizado por todas as chamadas de chat) |
+| `DELETE` | `/api/admin/models/:model_id` | Remoção de modelo do disco |
 
 ---
 
