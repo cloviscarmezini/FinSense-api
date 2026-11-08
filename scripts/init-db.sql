@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS category_quota_rules (
     deleted_at TIMESTAMPTZ
 );
 
--- 11. Modelos de IA e Tarefas de Download no Backend
+-- 11. Modelos de IA e Tarefas de Download no Backend (Escopo Global / Gestão Admin)
 CREATE TABLE IF NOT EXISTS ai_models (
     id VARCHAR(150) PRIMARY KEY,
     display_name VARCHAR(150) NOT NULL,
@@ -266,13 +266,14 @@ CREATE TABLE IF NOT EXISTS ai_models (
     local_path VARCHAR(500) NOT NULL,
     size_bytes BIGINT NOT NULL,
     quantization VARCHAR(50) NOT NULL DEFAULT 'Q4_K_M',
-    is_active_for_user UUID REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    is_global_active BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS ai_download_tasks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     repo_id VARCHAR(150) NOT NULL,
     file_name VARCHAR(255) NOT NULL,
     status VARCHAR(30) NOT NULL CHECK (status IN ('PENDING', 'DOWNLOADING', 'VERIFYING', 'READY', 'FAILED', 'CANCELED')),
@@ -284,7 +285,7 @@ CREATE TABLE IF NOT EXISTS ai_download_tasks (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_ai_download_user ON ai_download_tasks(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_ai_download_status ON ai_download_tasks(status);
 
 CREATE TABLE IF NOT EXISTS chat_messages (
     id UUID PRIMARY KEY,
