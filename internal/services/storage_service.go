@@ -42,6 +42,27 @@ func NewStorageService(cfg *config.Config) *StorageService {
 	}
 }
 
+func (s *StorageService) EnsureBucket(ctx context.Context) error {
+	if s.client == nil {
+		return fmt.Errorf("storage client is not initialized")
+	}
+
+	exists, err := s.client.BucketExists(ctx, s.cfg.S3Bucket)
+	if err != nil {
+		return fmt.Errorf("failed to check if bucket exists: %w", err)
+	}
+
+	if !exists {
+		err = s.client.MakeBucket(ctx, s.cfg.S3Bucket, minio.MakeBucketOptions{Region: s.cfg.S3Region})
+		if err != nil {
+			return fmt.Errorf("failed to create bucket: %w", err)
+		}
+		log.Printf("[STORAGE] Bucket '%s' criado com sucesso.", s.cfg.S3Bucket)
+	}
+
+	return nil
+}
+
 func (s *StorageService) GeneratePresignedUploadURL(ctx context.Context, storageKey string, expires time.Duration) (string, error) {
 	if s.client == nil {
 		return "", fmt.Errorf("storage client is not initialized")

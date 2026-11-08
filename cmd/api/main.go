@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -37,6 +36,16 @@ func main() {
 	authService := services.NewAuthService(db, cfg)
 	syncService := services.NewSyncService(db)
 	aiService := services.NewAIService(db, cfg)
+
+	// Garantir existência do bucket S3 em background
+	go func() {
+		time.Sleep(3 * time.Second)
+		if err := storageService.EnsureBucket(context.Background()); err != nil {
+			log.Printf("[STORAGE NOTE] Verificação de bucket inicial: %v", err)
+		} else {
+			log.Printf("[STORAGE] Bucket '%s' verificado e pronto para uploads.", cfg.S3Bucket)
+		}
+	}()
 
 	// 4. Configurar Roteador HTTP
 	router := api.SetupRouter(&api.RouterDependencies{
