@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FinSense AI Manager - Painel Administrativo de Modelos</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .pulse-dot {
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.15); }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <!-- Top Navigation -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+          <i class="fa-solid fa-brain text-slate-950 text-lg"></i>
+        </div>
+        <div>
+          <span class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            FinSense <span class="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">AI Engine</span>
+          </span>
+          <p class="text-xs text-slate-400">Microserviço Dedicado de Gestão de Modelos de IA</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-4">
+        <span class="inline-flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/60 px-3 py-1.5 rounded-full border border-slate-700/50">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></span>
+          Cluster Local: Porta 8082
+        </span>
+        <a href="http://localhost:8080/docs" target="_blank" class="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition">
+          <i class="fa-solid fa-book"></i> Swagger FinSense
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <!-- Notifications banner -->
+    <div id="toast" class="hidden p-4 rounded-xl text-sm border flex items-center justify-between transition-all">
+      <div class="flex items-center gap-2">
+        <i id="toast-icon" class="fa-solid fa-circle-check"></i>
+        <span id="toast-message">Mensagem</span>
+      </div>
+      <button onclick="hideToast()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+
+    <!-- Active Model Showcase -->
+    <div class="bg-gradient-to-br from-slate-900 to-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+      <div class="absolute -right-12 -top-12 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+        <div class="space-y-2">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            MODELO ATIVO GLOBAL DO SISTEMA
+          </div>
+          <h2 id="active-model-title" class="text-2xl font-bold text-white tracking-tight">Carregando modelo ativo...</h2>
+          <p id="active-model-desc" class="text-sm text-slate-400 max-w-2xl">
+            Todas as conversas do aplicativo FinSense usarão automaticamente este modelo, enriquecido com o contexto financeiro específico de cada usuário.
+          </p>
+        </div>
+        <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+          <div>
+            <div class="text-xs text-slate-500 uppercase font-mono">Tamanho no Disco</div>
+            <div id="active-model-size" class="text-lg font-semibold text-slate-200">-</div>
+          </div>
+          <div class="hidden sm:block w-px h-8 bg-slate-800"></div>
+          <div>
+            <div class="text-xs text-slate-500 uppercase font-mono">Quantização</div>
+            <div id="active-model-quant" class="text-lg font-semibold text-cyan-400">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Downloads Section (visible if active downloads exist) -->
+    <div id="downloads-section" class="hidden space-y-4">
+      <h3 class="text-lg font-semibold text-white flex items-center gap-2">
+        <i class="fa-solid fa-spinner fa-spin text-cyan-400"></i> Downloads em Execução
+      </h3>
+      <div id="downloads-container" class="grid grid-cols-1 gap-4">
+        <!-- Injected via JS -->
+      </div>
+    </div>
+
+    <!-- Grid: Catalog + Custom Download Form -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <!-- Suggested Models Catalog (2 cols) -->
+      <div class="lg:col-span-2 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-semibold text-white flex items-center gap-2">
+            <i class="fa-solid fa-layer-group text-slate-400"></i> Modelos Sugeridos para o FinSense
+          </h3>
+          <span class="text-xs text-slate-500">Otimizados para cálculos bancários e categorização</span>
+        </div>
+        <div id="suggested-models-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+
+      <!-- Custom HF Download Form (1 col) -->
+      <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-5">
+        <div class="flex items-center gap-2 border-b border-slate-800 pb-3">
+          <i class="fa-solid fa-cloud-arrow-down text-emerald-400"></i>
+          <h3 class="font-semibold text-white">Baixar do Hugging Face</h3>
+        </div>
+        <form id="custom-download-form" onsubmit="handleCustomDownload(event)" class="space-y-4 text-sm">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Repositório (Repo ID)</label>
+            <input type="text" id="custom-repo" placeholder="Ex: bartowski/Llama-3.2-3B-Instruct-GGUF" required
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Arquivo GGUF (Nome ou Filtro)</label>
+            <input type="text" id="custom-file" placeholder="Ex: Llama-3.2-3B-Instruct-Q4_K_M.gguf" required
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Token Hugging Face (Opcional)</label>
+            <input type="password" id="custom-token" placeholder="hf_... (necessário apenas para modelos privados)"
+              class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500 text-xs">
+          </div>
+          <button type="submit" id="btn-submit-download"
+            class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-lg text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20">
+            <i class="fa-solid fa-download"></i> Iniciar Download no Servidor
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Installed Models Table -->
+    <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-semibold text-white flex items-center gap-2">
+          <i class="fa-solid fa-hard-drive text-slate-400"></i> Modelos Baixados no Servidor
+        </h3>
+        <button onclick="loadDashboard()" class="text-xs text-slate-400 hover:text-white flex items-center gap-1 transition">
+          <i class="fa-solid fa-rotate"></i> Atualizar Lista
+        </button>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm text-slate-300">
+          <thead class="text-xs text-slate-400 uppercase bg-slate-950/60 border-b border-slate-800">
+            <tr>
+              <th scope="col" class="px-4 py-3">Modelo / Arquivo</th>
+              <th scope="col" class="px-4 py-3">Quantização</th>
+              <th scope="col" class="px-4 py-3">Tamanho</th>
+              <th scope="col" class="px-4 py-3">Status</th>
+              <th scope="col" class="px-4 py-3 text-right">Ações de Administrador</th>
+            </tr>
+          </thead>
+          <tbody id="installed-models-tbody" class="divide-y divide-slate-800/60 font-mono text-xs">
+            <!-- Injected via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let activeTasks = [];
+    let pollInterval = null;
+
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/api/admin/models');
+        if (!res.ok) throw new Error('Falha ao consultar modelos');
+        const data = await res.json();
+        renderDashboard(data);
+      } catch (err) {
+        console.error(err);
+        showToast('Erro ao carregar dados do microserviço: ' + err.message, 'error');
+      }
+    }
+
+    function renderDashboard(data) {
+      // 1. Active Model Banner
+      const activeTitle = document.getElementById('active-model-title');
+      const activeSize = document.getElementById('active-model-size');
+      const activeQuant = document.getElementById('active-model-quant');
+
+      const activeModel = (data.installed_models || []).find(m => m.is_active);
+      if (activeModel) {
+        activeTitle.innerText = activeModel.display_name || activeModel.id;
+        activeSize.innerText = formatBytes(activeModel.size_bytes);
+        activeQuant.innerText = activeModel.quantization || 'Q4_K_M';
+      } else {
+        activeTitle.innerText = 'Nenhum modelo ativo definido';
+        activeSize.innerText = '0 GB';
+        activeQuant.innerText = '-';
+      }
+
+      // 2. Suggested Models Grid
+      const suggestedGrid = document.getElementById('suggested-models-grid');
+      suggestedGrid.innerHTML = '';
+      (data.suggested_models || []).forEach(model => {
+        const isDownloaded = model.is_downloaded;
+        const card = document.createElement('div');
+        card.className = "bg-slate-900 border border-slate-800/80 rounded-xl p-5 space-y-3 flex flex-col justify-between";
+        card.innerHTML = `
+          <div class="space-y-1.5">
+            <div class="flex items-start justify-between">
+              <h4 class="font-semibold text-white text-sm">${model.name}</h4>
+              <span class="text-[11px] font-mono px-2 py-0.5 rounded ${isDownloaded ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400'}">
+                ${isDownloaded ? 'Instalado' : model.size_estimate}
+              </span>
+            </div>
+            <p class="text-xs text-slate-400">${model.description}</p>
+          </div>
+          <div class="pt-2">
+            ${isDownloaded ? `
+              <button disabled class="w-full py-2 px-3 rounded-lg text-xs bg-slate-800/50 text-slate-500 font-medium cursor-not-allowed">
+                <i class="fa-solid fa-check text-emerald-400 mr-1"></i> Já Disponível no Disco
+              </button>
+            ` : `
+              <button onclick="triggerSuggestedDownload('${model.id}')" class="w-full py-2 px-3 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-cloud-arrow-down text-cyan-400"></i> Baixar para o Servidor
+              </button>
+            `}
+          </div>
+        `;
+        suggestedGrid.appendChild(card);
+      });
+
+      // 3. Installed Models Table
+      const tbody = document.getElementById('installed-models-tbody');
+      tbody.innerHTML = '';
+      if (!data.installed_models || data.installed_models.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center text-slate-500 font-sans">Nenhum modelo baixado no servidor ainda.</td></tr>`;
+      } else {
+        data.installed_models.forEach(m => {
+          const tr = document.createElement('tr');
+          tr.className = "hover:bg-slate-900/40 transition";
+          tr.innerHTML = `
+            <td class="px-4 py-3.5">
+              <div class="font-medium text-slate-200 font-sans">${m.display_name || m.id}</div>
+              <div class="text-[11px] text-slate-500">${m.file_name}</div>
+            </td>
+            <td class="px-4 py-3.5 text-cyan-400">${m.quantization}</td>
+            <td class="px-4 py-3.5 text-slate-300 font-sans">${formatBytes(m.size_bytes)}</td>
+            <td class="px-4 py-3.5">
+              ${m.is_active ? `
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-sans font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> ATIVO GLOBAL
+                </span>
+              ` : `
+                <span class="text-slate-500 font-sans text-xs">Inativo</span>
+              `}
+            </td>
+            <td class="px-4 py-3.5 text-right space-x-2 font-sans">
+              ${!m.is_active ? `
+                <button onclick="selectActiveModel('${m.id}')" class="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-medium border border-emerald-500/30 transition">
+                  Definir como Ativo
+                </button>
+              ` : ''}
+              <button onclick="deleteModel('${m.id}')" class="px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs transition border border-rose-500/20">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    async function triggerSuggestedDownload(modelId) {
+      let filter = "q4_k_m";
+      if (modelId.includes("Llama-3.2-3B")) {
+        filter = "Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+      } else if (modelId.includes("Qwen2.5-3B")) {
+        filter = "qwen2.5-3b-instruct-q4_k_m.gguf";
+      } else if (modelId.includes("Qwen2.5-1.5B")) {
+        filter = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
+      }
+      await initiateDownload(modelId, filter, "");
+    }
+
+    async function handleCustomDownload(e) {
+      e.preventDefault();
+      const repo = document.getElementById('custom-repo').value.trim();
+      const file = document.getElementById('custom-file').value.trim();
+      const token = document.getElementById('custom-token').value.trim();
+      await initiateDownload(repo, file, token);
+    }
+
+    async function initiateDownload(repo, file, token) {
+      try {
+        const btn = document.getElementById('btn-submit-download');
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Solicitando...`;
+
+        const res = await fetch('/api/admin/models/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repo_id: repo,
+            filename_filter: file,
+            hugging_face_token: token
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || 'Erro ao iniciar download');
+
+        showToast('Download iniciado no servidor!', 'success');
+        trackTask(data.task_id);
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        const btn = document.getElementById('btn-submit-download');
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-download"></i> Iniciar Download no Servidor`;
+      }
+    }
+
+    function trackTask(taskId) {
+      if (!activeTasks.includes(taskId)) activeTasks.push(taskId);
+      updateDownloadsSection();
+      if (!pollInterval) {
+        pollInterval = setInterval(pollActiveTasks, 1500);
+      }
+    }
+
+    async function pollActiveTasks() {
+      if (activeTasks.length === 0) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        updateDownloadsSection();
+        loadDashboard();
+        return;
+      }
+
+      for (let i = activeTasks.length - 1; i >= 0; i--) {
+        const taskId = activeTasks[i];
+        try {
+          const res = await fetch(`/api/admin/models/download/${taskId}`);
+          if (!res.ok) continue;
+          const task = await res.json();
+
+          renderTaskProgress(task);
+
+          if (task.status === 'READY') {
+            showToast(`Modelo ${task.file_name} baixado com sucesso!`, 'success');
+            activeTasks.splice(i, 1);
+            loadDashboard();
+          } else if (task.status === 'FAILED') {
+            showToast(`Falha no download: ${task.error_message}`, 'error');
+            activeTasks.splice(i, 1);
+          } else if (task.status === 'CANCELED') {
+            showToast(`Download cancelado.`, 'info');
+            activeTasks.splice(i, 1);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      updateDownloadsSection();
+    }
+
+    function updateDownloadsSection() {
+      const section = document.getElementById('downloads-section');
+      if (activeTasks.length > 0) {
+        section.classList.remove('hidden');
+      } else {
+        section.classList.add('hidden');
+      }
+    }
+
+    function renderTaskProgress(task) {
+      const container = document.getElementById('downloads-container');
+      let item = document.getElementById(`task-${task.task_id}`);
+      if (!item) {
+        item = document.createElement('div');
+        item.id = `task-${task.task_id}`;
+        item.className = "bg-slate-900 border border-cyan-500/30 rounded-xl p-4 space-y-3 shadow-lg shadow-cyan-500/5";
+        container.appendChild(item);
+      }
+
+      const speedMB = (task.speed_bytes_sec / (1024 * 1024)).toFixed(1);
+      const dlMB = (task.downloaded_bytes / (1024 * 1024)).toFixed(1);
+      const totalMB = (task.total_bytes / (1024 * 1024)).toFixed(1);
+
+      item.innerHTML = `
+        <div class="flex items-center justify-between text-sm">
+          <div>
+            <span class="font-semibold text-white">${task.file_name}</span>
+            <span class="text-xs text-slate-400 ml-2 font-mono">${task.repo_id}</span>
+          </div>
+          <button onclick="cancelTask('${task.task_id}')" class="text-xs px-2.5 py-1 rounded bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 transition">
+            <i class="fa-solid fa-xmark mr-1"></i> Cancelar
+          </button>
+        </div>
+        <div class="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800">
+          <div class="bg-gradient-to-r from-cyan-500 to-emerald-400 h-2.5 rounded-full transition-all duration-300" style="width: ${task.progress_percentage}%"></div>
+        </div>
+        <div class="flex items-center justify-between text-xs text-slate-400 font-mono">
+          <span>${task.progress_percentage.toFixed(1)}% (${dlMB} MB / ${totalMB} MB)</span>
+          <span class="text-cyan-400">${speedMB} MB/s</span>
+        </div>
+      `;
+    }
+
+    async function cancelTask(taskId) {
+      try {
+        await fetch(`/api/admin/models/download/${taskId}/cancel`, { method: 'POST' });
+        showToast('Cancelamento solicitado...', 'info');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function selectActiveModel(modelId) {
+      try {
+        const res = await fetch('/api/admin/models/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model_id: modelId })
+        });
+        if (!res.ok) throw new Error('Falha ao definir modelo ativo');
+        showToast('Modelo ativo global atualizado com sucesso!', 'success');
+        loadDashboard();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function deleteModel(modelId) {
+      if (!confirm(`Tem certeza que deseja excluir o modelo ${modelId} do servidor?`)) return;
+      try {
+        const res = await fetch(`/api/admin/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Falha ao excluir modelo');
+        showToast('Modelo removido do disco com sucesso!', 'success');
+        loadDashboard();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function showToast(msg, type = 'success') {
+      const toast = document.getElementById('toast');
+      const icon = document.getElementById('toast-icon');
+      const text = document.getElementById('toast-message');
+
+      toast.className = `p-4 rounded-xl text-sm border flex items-center justify-between transition-all ${
+        type === 'error' ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' :
+        type === 'info' ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20' :
+        'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+      }`;
+
+      icon.className = `fa-solid ${
+        type === 'error' ? 'fa-triangle-exclamation text-rose-400' :
+        type === 'info' ? 'fa-circle-info text-cyan-400' :
+        'fa-circle-check text-emerald-400'
+      }`;
+
+      text.innerText = msg;
+      toast.classList.remove('hidden');
+      setTimeout(hideToast, 5000);
+    }
+
+    function hideToast() {
+      document.getElementById('toast').classList.add('hidden');
+    }
+
+    // Initialize
+    loadDashboard();
+  </script>
+</body>
+</html>

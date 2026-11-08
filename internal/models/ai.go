@@ -7,30 +7,31 @@ import (
 )
 
 type AIModel struct {
-	ID              string     `json:"id"`
-	DisplayName     string     `json:"display_name"`
-	RepoID          string     `json:"repo_id"`
-	FileName        string     `json:"file_name"`
-	LocalPath       string     `json:"local_path"`
-	SizeBytes       int64      `json:"size_bytes"`
-	Quantization    string     `json:"quantization"`
-	IsActiveForUser *uuid.UUID `json:"is_active_for_user,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	RepoID         string    `json:"repo_id"`
+	FileName       string    `json:"file_name"`
+	LocalPath      string    `json:"local_path"`
+	SizeBytes      int64     `json:"size_bytes"`
+	Quantization   string    `json:"quantization"`
+	IsGlobalActive bool      `json:"is_global_active"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type AIDownloadTask struct {
-	ID                 uuid.UUID `json:"task_id"`
-	UserID             uuid.UUID `json:"user_id"`
-	RepoID             string    `json:"repo_id"`
-	FileName           string    `json:"file_name"`
-	Status             string    `json:"status"` // PENDING, DOWNLOADING, VERIFYING, READY, FAILED, CANCELED
-	ProgressPercentage float64   `json:"progress_percentage"`
-	DownloadedBytes    int64     `json:"downloaded_bytes"`
-	TotalBytes         int64     `json:"total_bytes"`
-	SpeedBytesSec      int64     `json:"speed_bytes_sec"`
-	ErrorMessage       *string   `json:"error_message"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                 uuid.UUID  `json:"task_id"`
+	UserID             *uuid.UUID `json:"user_id,omitempty"`
+	RepoID             string     `json:"repo_id"`
+	FileName           string     `json:"file_name"`
+	Status             string     `json:"status"` // PENDING, DOWNLOADING, VERIFYING, READY, FAILED, CANCELED
+	ProgressPercentage float64    `json:"progress_percentage"`
+	DownloadedBytes    int64      `json:"downloaded_bytes"`
+	TotalBytes         int64      `json:"total_bytes"`
+	SpeedBytesSec      int64      `json:"speed_bytes_sec"`
+	ErrorMessage       *string    `json:"error_message"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type InstalledModelInfo struct {

@@ -25,6 +25,9 @@ type Config struct {
 	S3Region                   string
 	S3UseSSL                   bool
 	AIEngineURL                string
+	AIManagerURL               string
+	AdminPort                  string
+	AdminAPIKey                string
 	ModelsDir                  string
 	HuggingFaceDefaultToken    string
 }
@@ -49,6 +52,9 @@ func Load() *Config {
 		S3Region:                   getEnv("S3_REGION", "us-east-1"),
 		S3UseSSL:                   getEnvAsBool("S3_USE_SSL", false),
 		AIEngineURL:                getEnv("AI_ENGINE_URL", "http://localhost:8001"),
+		AIManagerURL:               getEnv("AI_MANAGER_URL", "http://localhost:8082"),
+		AdminPort:                  getEnv("ADMIN_PORT", "8082"),
+		AdminAPIKey:                getEnv("ADMIN_API_KEY", "finsense_admin_secret_key_2026"),
 		ModelsDir:                  getEnv("MODELS_DIR", "./models"),
 		HuggingFaceDefaultToken:    getEnv("HUGGING_FACE_DEFAULT_TOKEN", ""),
 	}
