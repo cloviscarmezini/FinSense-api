@@ -263,6 +263,7 @@ func (s *SyncService) GetAllActiveEntities(ctx context.Context, userID uuid.UUID
 				Operation:  models.OpInsert,
 				Data:       data,
 				Timestamp:  updatedAt,
+				UpdatedAt:  &updatedAt,
 			})
 			appendToDeltas(deltas, table, data)
 		}
@@ -351,6 +352,7 @@ func (s *SyncService) GetDeltaWithContainers(ctx context.Context, userID uuid.UU
 			Operation:  models.OperationType(opStr),
 			Data:       entityData,
 			Timestamp:  createdAt,
+			UpdatedAt:  &createdAt,
 		})
 	}
 
