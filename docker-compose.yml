@@ -121,6 +121,11 @@ services:
       - MODELS_DIR=/app/models
       - AI_ENGINE_URL=http://finsense-ai:8000
       - ADMIN_API_KEY=finsense_admin_secret_key_2026
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     volumes:
       - ./models:/app/models
       - ./web:/app/web
