@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,6 +64,46 @@ func normalizeEntityData(data map[string]interface{}) map[string]interface{} {
 	return res
 }
 
+func entityPriority(entityName string, op models.OperationType) int {
+	if op == models.OpDelete {
+		switch entityName {
+		case "financial_transactions":
+			return 1
+		case "category_quota_rules", "category_provisions", "credit_contracts", "investment_items", "debt_items":
+			return 2
+		case "categories":
+			return 3
+		case "bank_accounts":
+			return 4
+		default:
+			return 5
+		}
+	} else {
+		switch entityName {
+		case "bank_accounts":
+			return 1
+		case "categories":
+			return 2
+		case "credit_contracts", "investment_items", "debt_items":
+			return 3
+		case "category_provisions", "category_quota_rules":
+			return 4
+		case "financial_transactions":
+			return 5
+		default:
+			return 6
+		}
+	}
+}
+
+func sortMutationsByDependency(muts []models.Mutation) {
+	sort.SliceStable(muts, func(i, j int) bool {
+		pi := entityPriority(muts[i].EntityName, muts[i].Operation)
+		pj := entityPriority(muts[j].EntityName, muts[j].Operation)
+		return pi < pj
+	})
+}
+
 // PushPull handles processing client mutations and returning server deltas
 func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models.PushPullRequest) (*models.PushPullResponse, error) {
 	tx, err := s.db.Pool.Begin(ctx)
@@ -76,9 +117,13 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 		sinceRev = req.ClientLastSyncRevision
 	}
 
+	// Sort mutations to enforce dependency order (e.g. Accounts and Categories before Transactions)
+	sortMutationsByDependency(req.Mutations)
+
 	appliedIDs := make([]uuid.UUID, 0, len(req.Mutations))
 	ackIDs := make([]uuid.UUID, 0, len(req.Mutations))
 	rejectedMutations := make([]models.RejectedMutation, 0)
+	skippedMutations := make([]models.Mutation, 0)
 
 	for _, m := range req.Mutations {
 		// Normalization of fields
@@ -115,8 +160,9 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 			return nil, fmt.Errorf("failed to create savepoint: %w", err)
 		}
 
-		// Apply mutation based on entity type and operation
-		if err := s.applyMutation(ctx, tx, userID, m); err != nil {
+		// Apply mutation based on entity type and operation with Last-Write-Wins (LWW)
+		applied, err := s.applyMutation(ctx, tx, userID, m)
+		if err != nil {
 			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT mut_sp")
 			rejectedMutations = append(rejectedMutations, models.RejectedMutation{
 				MutationID: m.MutationID,
@@ -125,18 +171,24 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 			continue
 		}
 
-		// Record in changelog with valid constraint check (INSERT, UPDATE, DELETE)
-		_, err = tx.Exec(ctx, `
-			INSERT INTO sync_changelog (user_id, client_id, entity_name, entity_id, operation, mutation_id, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`, userID, req.ClientID, m.EntityName, m.EntityID, opStr, m.MutationID, time.Now().UTC())
-		if err != nil {
-			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT mut_sp")
-			rejectedMutations = append(rejectedMutations, models.RejectedMutation{
-				MutationID: m.MutationID,
-				Reason:     err.Error(),
-			})
-			continue
+		if applied {
+			// Record in changelog with valid constraint check (INSERT, UPDATE, DELETE)
+			_, err = tx.Exec(ctx, `
+				INSERT INTO sync_changelog (user_id, client_id, entity_name, entity_id, operation, mutation_id, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, userID, req.ClientID, m.EntityName, m.EntityID, opStr, m.MutationID, time.Now().UTC())
+			if err != nil {
+				_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT mut_sp")
+				rejectedMutations = append(rejectedMutations, models.RejectedMutation{
+					MutationID: m.MutationID,
+					Reason:     err.Error(),
+				})
+				continue
+			}
+		} else {
+			// Mutation was superseded by a newer operation (LWW conflict resolution).
+			// We track it to immediately return the winning current state to the client.
+			skippedMutations = append(skippedMutations, m)
 		}
 
 		_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT mut_sp")
@@ -152,6 +204,46 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 	serverChanges, latestRev, deltas, tombstones, err := s.GetDeltaWithContainers(ctx, userID, appliedIDs, sinceRev)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch server changes: %w", err)
+	}
+
+	// For any skipped mutations (stale operations that lost LWW), ensure the client receives the winning entity state
+	for _, m := range skippedMutations {
+		var isDeleted bool
+		var updatedAt time.Time
+		query := fmt.Sprintf("SELECT deleted_at IS NOT NULL, updated_at FROM %s WHERE id = $1 AND user_id = $2", m.EntityName)
+		rowErr := s.db.Pool.QueryRow(ctx, query, m.EntityID, userID).Scan(&isDeleted, &updatedAt)
+		if rowErr != nil {
+			continue
+		}
+		if isDeleted {
+			tombstones = append(tombstones, map[string]interface{}{
+				"entity_name": m.EntityName,
+				"entity_id":   m.EntityID,
+				"deleted_at":  updatedAt.Format(time.RFC3339),
+			})
+			serverChanges = append(serverChanges, models.Mutation{
+				MutationID: uuid.New(),
+				EntityName: m.EntityName,
+				EntityID:   m.EntityID,
+				Operation:  models.OpDelete,
+				Timestamp:  updatedAt,
+				UpdatedAt:  &updatedAt,
+			})
+		} else {
+			entityData, _ := s.fetchEntityData(ctx, userID, m.EntityName, m.EntityID)
+			if entityData != nil {
+				appendToDeltas(deltas, m.EntityName, entityData)
+				serverChanges = append(serverChanges, models.Mutation{
+					MutationID: uuid.New(),
+					EntityName: m.EntityName,
+					EntityID:   m.EntityID,
+					Operation:  models.OpInsert,
+					Data:       entityData,
+					Timestamp:  updatedAt,
+					UpdatedAt:  &updatedAt,
+				})
+			}
+		}
 	}
 
 	return &models.PushPullResponse{
@@ -369,7 +461,7 @@ func (s *SyncService) GetDelta(ctx context.Context, userID uuid.UUID, clientID s
 func (s *SyncService) getOrFallbackAccount(ctx context.Context, tx pgx.Tx, userID uuid.UUID, accountID uuid.UUID) (uuid.UUID, error) {
 	if accountID != uuid.Nil {
 		var exists bool
-		err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", accountID, userID).Scan(&exists)
+		err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2)", accountID, userID).Scan(&exists)
 		if err == nil && exists {
 			return accountID, nil
 		}
@@ -396,7 +488,7 @@ func (s *SyncService) getOrFallbackAccount(ctx context.Context, tx pgx.Tx, userI
 func (s *SyncService) getOrFallbackCategory(ctx context.Context, tx pgx.Tx, userID uuid.UUID, categoryID uuid.UUID, catType string) (uuid.UUID, error) {
 	if categoryID != uuid.Nil {
 		var exists bool
-		err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", categoryID, userID).Scan(&exists)
+		err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1 AND user_id = $2)", categoryID, userID).Scan(&exists)
 		if err == nil && exists {
 			return categoryID, nil
 		}
@@ -431,24 +523,57 @@ func (s *SyncService) getOrFallbackCategory(ctx context.Context, tx pgx.Tx, user
 	return fallbackID, nil
 }
 
-// applyMutation executes insert/update/delete according to entity name
-func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.UUID, m models.Mutation) error {
-	now := time.Now().UTC()
+// applyMutation executes insert/update/delete according to entity name with Last-Write-Wins (LWW)
+func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.UUID, m models.Mutation) (bool, error) {
+	effectiveTime := m.Timestamp.UTC()
+	if effectiveTime.IsZero() {
+		if m.UpdatedAt != nil && !m.UpdatedAt.IsZero() {
+			effectiveTime = m.UpdatedAt.UTC()
+		} else {
+			effectiveTime = time.Now().UTC()
+		}
+	}
+
+	validTables := map[string]bool{
+		"bank_accounts":          true,
+		"categories":             true,
+		"financial_transactions": true,
+		"debt_items":             true,
+		"investment_items":       true,
+		"credit_contracts":       true,
+		"category_provisions":    true,
+		"category_quota_rules":   true,
+	}
+	if !validTables[m.EntityName] {
+		return false, nil
+	}
+
+	if m.Operation == models.OpDelete {
+		tag, err := tx.Exec(ctx, fmt.Sprintf(`
+			UPDATE %s 
+			SET deleted_at = $1, updated_at = $1 
+			WHERE id = $2 AND user_id = $3 AND (updated_at <= $1 OR updated_at IS NULL)
+		`, m.EntityName), effectiveTime, m.EntityID, userID)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+	}
+
 	jsonBytes, _ := json.Marshal(m.Data)
 
 	switch m.EntityName {
 	case "bank_accounts":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE bank_accounts SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.BankAccount
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
 		}
 		item.ID = m.EntityID
 		item.UserID = userID
-		item.UpdatedAt = now
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
 
 		query := `
 			INSERT INTO bank_accounts (id, user_id, name, bank_preset_id, custom_image_path, icon_symbol, color_hex, initial_balance, agency, account_number, display_order, created_at, updated_at)
@@ -467,21 +592,23 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE bank_accounts.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.BankPresetID, item.CustomImagePath, item.IconSymbol, item.ColorHex, item.InitialBalance, item.Agency, item.AccountNumber, item.DisplayOrder, now, now)
-		return err
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.BankPresetID, item.CustomImagePath, item.IconSymbol, item.ColorHex, item.InitialBalance, item.Agency, item.AccountNumber, item.DisplayOrder, createdAt, effectiveTime)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "categories":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE categories SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.Category
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
 		}
 		item.ID = m.EntityID
 		item.UserID = userID
-		item.UpdatedAt = now
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
 
 		query := `
 			INSERT INTO categories (id, user_id, name, type, icon_symbol, color_hex, keywords, is_system_default, display_order, created_at, updated_at)
@@ -498,21 +625,23 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE categories.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.Type, item.IconSymbol, item.ColorHex, item.Keywords, item.IsSystemDefault, item.DisplayOrder, now, now)
-		return err
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.Type, item.IconSymbol, item.ColorHex, item.Keywords, item.IsSystemDefault, item.DisplayOrder, createdAt, effectiveTime)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "financial_transactions":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE financial_transactions SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.FinancialTransaction
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
 		}
 		item.ID = m.EntityID
 		item.UserID = userID
-		item.UpdatedAt = now
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
 		if item.RecurrenceMode == "" {
 			item.RecurrenceMode = "single"
 		}
@@ -522,13 +651,13 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 
 		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
 		if err != nil {
-			return fmt.Errorf("account validation failed: %w", err)
+			return false, fmt.Errorf("account validation failed: %w", err)
 		}
 		item.AccountID = accID
 
 		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, item.Type)
 		if err != nil {
-			return fmt.Errorf("category validation failed: %w", err)
+			return false, fmt.Errorf("category validation failed: %w", err)
 		}
 		item.CategoryID = catID
 
@@ -600,34 +729,39 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE financial_transactions.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err = tx.Exec(ctx, query,
+		tag, err := tx.Exec(ctx, query,
 			item.ID, item.UserID, item.AccountID, item.CategoryID, item.Name, item.Details, item.Amount, item.Date, item.Type, item.IsPaid,
 			item.AttachmentPath, item.AttachmentName, item.IgnoreInConsolidated, item.RecurrenceMode, item.RecurrenceFrequency,
 			item.IsCanceledRecurringSeries, item.SeriesGroupID, item.InstallmentIndex, item.InstallmentTotal,
 			item.RawStatementLine, item.StatementOccurrenceIndex, item.LinkedContractID, item.LinkedInvestmentID,
-			item.LinkedDebtID, item.LinkedQuotaID, item.LinkedQuotaUnits, item.LinkedQuotaYearMonthKey, now, now,
+			item.LinkedDebtID, item.LinkedQuotaID, item.LinkedQuotaUnits, item.LinkedQuotaYearMonthKey, createdAt, effectiveTime,
 		)
-		return err
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "debt_items":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE debt_items SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.DebtItem
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
 		}
 		if item.PaidFromAccountID != nil {
 			var exists bool
-			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", *item.PaidFromAccountID, userID).Scan(&exists)
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2)", *item.PaidFromAccountID, userID).Scan(&exists)
 			if !exists {
 				item.PaidFromAccountID = nil
 			}
 		}
 		if item.PaymentTransactionID != nil {
 			var exists bool
-			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM financial_transactions WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", *item.PaymentTransactionID, userID).Scan(&exists)
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM financial_transactions WHERE id = $1 AND user_id = $2)", *item.PaymentTransactionID, userID).Scan(&exists)
 			if !exists {
 				item.PaymentTransactionID = nil
 			}
@@ -653,21 +787,26 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE debt_items.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err := tx.Exec(ctx, query, m.EntityID, userID, item.Name, item.CustomImagePath, item.BankPresetID, item.IconSymbol, item.ColorHex, item.OriginalAmount, item.ContractedDate, item.Notes, item.IsPaid, item.NegotiatedAmount, item.PaidDate, item.PaidFromAccountID, item.PaymentTransactionID, now, now)
-		return err
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.CustomImagePath, item.BankPresetID, item.IconSymbol, item.ColorHex, item.OriginalAmount, item.ContractedDate, item.Notes, item.IsPaid, item.NegotiatedAmount, item.PaidDate, item.PaidFromAccountID, item.PaymentTransactionID, createdAt, effectiveTime)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "investment_items":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE investment_items SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.InvestmentItem
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
 		}
 		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.InvestmentAccountID)
 		if err != nil {
-			return fmt.Errorf("investment account validation failed: %w", err)
+			return false, fmt.Errorf("investment account validation failed: %w", err)
 		}
 		item.InvestmentAccountID = accID
 
@@ -687,33 +826,38 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE investment_items.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err = tx.Exec(ctx, query, m.EntityID, userID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, now, now)
-		return err
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, createdAt, effectiveTime)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "credit_contracts":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE credit_contracts SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.CreditContract
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
 		}
 		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
 		if err != nil {
-			return fmt.Errorf("credit contract account validation failed: %w", err)
+			return false, fmt.Errorf("credit contract account validation failed: %w", err)
 		}
 		item.AccountID = accID
 
 		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
 		if err != nil {
-			return fmt.Errorf("credit contract category validation failed: %w", err)
+			return false, fmt.Errorf("credit contract category validation failed: %w", err)
 		}
 		item.CategoryID = catID
 
 		if item.SettledAccountID != nil {
 			var exists bool
-			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)", *item.SettledAccountID, userID).Scan(&exists)
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2)", *item.SettledAccountID, userID).Scan(&exists)
 			if !exists {
 				item.SettledAccountID = nil
 			}
@@ -754,26 +898,31 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE credit_contracts.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err = tx.Exec(ctx, query,
-			m.EntityID, userID, item.AccountID, item.CategoryID, item.Kind, item.Name, item.ContractNumber, item.LoanSubtype, item.FinancingSubtype,
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.AccountID, item.CategoryID, item.Kind, item.Name, item.ContractNumber, item.LoanSubtype, item.FinancingSubtype,
 			item.AmortizationSystem, item.TotalContractedAmount, item.OutstandingBalance, item.InstallmentAmount, item.BillingDay,
 			item.TotalInstallments, item.MonthlyInterestRate, item.StartDate, item.PastInstallmentsElapsedAtCreation,
-			item.ExtraAmortizedTotal, item.IsSettled, item.SettledAmount, item.SettledDate, item.SettledAccountID, item.Notes, now, now,
+			item.ExtraAmortizedTotal, item.IsSettled, item.SettledAmount, item.SettledDate, item.SettledAccountID, item.Notes, createdAt, effectiveTime,
 		)
-		return err
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "category_provisions":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE category_provisions SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.CategoryProvision
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
 		}
 		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
 		if err != nil {
-			return fmt.Errorf("provision category validation failed: %w", err)
+			return false, fmt.Errorf("provision category validation failed: %w", err)
 		}
 		item.CategoryID = catID
 
@@ -792,21 +941,26 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE category_provisions.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err = tx.Exec(ctx, query, m.EntityID, userID, item.CategoryID, item.Year, item.Month, item.EstimatedAmount, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, now, now)
-		return err
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.CategoryID, item.Year, item.Month, item.EstimatedAmount, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, createdAt, effectiveTime)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	case "category_quota_rules":
-		if m.Operation == models.OpDelete {
-			_, err := tx.Exec(ctx, "UPDATE category_quota_rules SET deleted_at = $1, updated_at = $1 WHERE id = $2 AND user_id = $3", now, m.EntityID, userID)
-			return err
-		}
 		var item models.CategoryQuotaRule
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
-			return err
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
 		}
 		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
 		if err != nil {
-			return fmt.Errorf("quota category validation failed: %w", err)
+			return false, fmt.Errorf("quota category validation failed: %w", err)
 		}
 		item.CategoryID = catID
 
@@ -829,11 +983,14 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				deleted_at = NULL
 			WHERE category_quota_rules.updated_at <= EXCLUDED.updated_at;
 		`
-		_, err = tx.Exec(ctx, query, m.EntityID, item.SeriesID, userID, item.CategoryID, item.Name, item.IconSymbol, item.Year, item.Month, item.PlannedQuantity, item.EstimatedUnitPrice, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, now, now)
-		return err
+		tag, err := tx.Exec(ctx, query, item.ID, item.SeriesID, item.UserID, item.CategoryID, item.Name, item.IconSymbol, item.Year, item.Month, item.PlannedQuantity, item.EstimatedUnitPrice, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, createdAt, effectiveTime)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
 
 	default:
-		return nil
+		return false, nil
 	}
 }
 
