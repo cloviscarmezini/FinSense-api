@@ -75,6 +75,10 @@ func (h *SyncHandler) Delta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type ResetDataRequest struct {
+	Targets []string `json:"targets,omitempty"`
+}
+
 func (h *SyncHandler) Reset(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.GetUserIDFromContext(r.Context())
 	if !ok {
@@ -82,7 +86,12 @@ func (h *SyncHandler) Reset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.syncService.ResetUserData(r.Context(), userID); err != nil {
+	var req ResetDataRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	if err := h.syncService.ResetUserData(r.Context(), userID, req.Targets); err != nil {
 		utils.RespondWithError(w, http.StatusInternalServerError, utils.ErrInternalServer, "Falha ao resetar dados: "+err.Error(), nil)
 		return
 	}

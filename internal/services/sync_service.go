@@ -1010,35 +1010,80 @@ func (s *SyncService) fetchEntityData(ctx context.Context, userID uuid.UUID, ent
 	return data, nil
 }
 
-// ResetUserData purges all financial and sync data for the given user
-func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID) error {
-	tables := []string{
-		"sync_changelog",
-		"amortization_records",
-		"investment_movements",
-		"financial_transactions",
-		"credit_contracts",
-		"debt_items",
-		"investment_items",
-		"category_quota_rules",
-		"category_provisions",
-		"categories",
-		"bank_accounts",
-		"asset_files",
-		"chat_messages",
-	}
-
+// ResetUserData purges financial and sync data for the given user, either completely or for specific targets
+func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targets []string) error {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	for _, table := range tables {
+	targetSet := make(map[string]bool)
+	for _, t := range targets {
+		targetSet[strings.ToLower(strings.TrimSpace(t))] = true
+	}
+
+	resetAll := len(targetSet) == 0
+
+	var tablesToDelete []string
+	if resetAll {
+		tablesToDelete = []string{
+			"sync_changelog",
+			"amortization_records",
+			"investment_movements",
+			"financial_transactions",
+			"credit_contracts",
+			"debt_items",
+			"investment_items",
+			"category_quota_rules",
+			"category_provisions",
+			"categories",
+			"bank_accounts",
+			"asset_files",
+			"chat_messages",
+		}
+	} else {
+		// Dependent children are ordered before parent foreign keys
+		if targetSet["transactions"] || targetSet["financial_transactions"] {
+			tablesToDelete = append(tablesToDelete, "financial_transactions")
+		}
+		if targetSet["investments"] || targetSet["investment_items"] {
+			tablesToDelete = append(tablesToDelete, "investment_movements", "investment_items")
+		}
+		if targetSet["loans"] || targetSet["financings"] || targetSet["credit_contracts"] {
+			if targetSet["loans"] && !targetSet["financings"] {
+				_, _ = tx.Exec(ctx, "DELETE FROM amortization_records WHERE contract_id IN (SELECT id FROM credit_contracts WHERE user_id = $1 AND kind = 'loan')", userID)
+				_, _ = tx.Exec(ctx, "DELETE FROM credit_contracts WHERE user_id = $1 AND kind = 'loan'", userID)
+			} else if targetSet["financings"] && !targetSet["loans"] {
+				_, _ = tx.Exec(ctx, "DELETE FROM amortization_records WHERE contract_id IN (SELECT id FROM credit_contracts WHERE user_id = $1 AND kind = 'financing')", userID)
+				_, _ = tx.Exec(ctx, "DELETE FROM credit_contracts WHERE user_id = $1 AND kind = 'financing'", userID)
+			} else {
+				tablesToDelete = append(tablesToDelete, "amortization_records", "credit_contracts")
+			}
+		}
+		if targetSet["debts"] || targetSet["debt_items"] {
+			tablesToDelete = append(tablesToDelete, "debt_items")
+		}
+		if targetSet["categories"] {
+			tablesToDelete = append(tablesToDelete, "category_quota_rules", "category_provisions", "categories")
+		}
+		if targetSet["accounts"] || targetSet["bank_accounts"] {
+			tablesToDelete = append(tablesToDelete, "bank_accounts")
+		}
+		if targetSet["aimodelsandchat"] || targetSet["chat"] || targetSet["chat_messages"] {
+			tablesToDelete = append(tablesToDelete, "chat_messages")
+		}
+	}
+
+	for _, table := range tablesToDelete {
 		_, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE user_id = $1", table), userID)
 		if err != nil {
 			return fmt.Errorf("failed to delete from %s: %w", table, err)
 		}
+	}
+
+	if resetAll {
+		_, _ = tx.Exec(ctx, "DELETE FROM sync_changelog WHERE user_id = $1", userID)
 	}
 
 	return tx.Commit(ctx)
