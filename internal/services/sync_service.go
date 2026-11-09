@@ -1082,8 +1082,13 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 		}
 	}
 
-	if resetAll {
+	isWipingAll := resetAll || (targetSet["transactions"] && targetSet["accounts"] && targetSet["categories"])
+	if isWipingAll {
 		_, _ = tx.Exec(ctx, "DELETE FROM sync_changelog WHERE user_id = $1", userID)
+	} else {
+		for _, table := range tablesToDelete {
+			_, _ = tx.Exec(ctx, "DELETE FROM sync_changelog WHERE user_id = $1 AND entity_name = $2", userID, table)
+		}
 	}
 
 	return tx.Commit(ctx)
