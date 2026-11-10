@@ -246,6 +246,8 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 		}
 	}
 
+	go s.touchDeviceSession(context.Background(), userID, req.ClientID)
+
 	return &models.PushPullResponse{
 		LatestRevision:          latestRev,
 		ServerCurrentRevision:   latestRev,
@@ -256,6 +258,26 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 		Deltas:                  deltas,
 		Tombstones:              tombstones,
 	}, nil
+}
+
+func (s *SyncService) touchDeviceSession(ctx context.Context, userID uuid.UUID, clientID string) {
+	if clientID == "" || clientID == "api" {
+		return
+	}
+	platform := "Unknown"
+	lower := strings.ToLower(clientID)
+	if strings.Contains(lower, "mac") {
+		platform = "macOS"
+	} else if strings.Contains(lower, "ios") || strings.Contains(lower, "iphone") || strings.Contains(lower, "ipad") {
+		platform = "iOS"
+	}
+	_, _ = s.db.Pool.Exec(ctx, `
+		INSERT INTO user_device_sessions (user_id, device_id, platform, app_version, last_access_at, updated_at)
+		VALUES ($1, $2, $3, '1.0.0', NOW(), NOW())
+		ON CONFLICT (user_id, device_id) DO UPDATE SET
+			last_access_at = NOW(),
+			updated_at = NOW()
+	`, userID, clientID, platform)
 }
 
 func initEmptyDeltas() map[string]interface{} {
@@ -696,9 +718,10 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				attachment_path, attachment_name, ignore_in_consolidated, recurrence_mode, recurrence_frequency,
 				is_canceled_recurring_series, series_group_id, installment_index, installment_total,
 				raw_statement_line, statement_occurrence_index, linked_contract_id, linked_investment_id,
-				linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key, created_at, updated_at
+				linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
+				transaction_origin, linked_entity_id, created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
 			ON CONFLICT (id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				category_id = EXCLUDED.category_id,
@@ -725,6 +748,8 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				linked_quota_id = EXCLUDED.linked_quota_id,
 				linked_quota_units = EXCLUDED.linked_quota_units,
 				linked_quota_year_month_key = EXCLUDED.linked_quota_year_month_key,
+				transaction_origin = EXCLUDED.transaction_origin,
+				linked_entity_id = EXCLUDED.linked_entity_id,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE financial_transactions.updated_at <= EXCLUDED.updated_at;
@@ -734,7 +759,8 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.AttachmentPath, item.AttachmentName, item.IgnoreInConsolidated, item.RecurrenceMode, item.RecurrenceFrequency,
 			item.IsCanceledRecurringSeries, item.SeriesGroupID, item.InstallmentIndex, item.InstallmentTotal,
 			item.RawStatementLine, item.StatementOccurrenceIndex, item.LinkedContractID, item.LinkedInvestmentID,
-			item.LinkedDebtID, item.LinkedQuotaID, item.LinkedQuotaUnits, item.LinkedQuotaYearMonthKey, createdAt, effectiveTime,
+			item.LinkedDebtID, item.LinkedQuotaID, item.LinkedQuotaUnits, item.LinkedQuotaYearMonthKey,
+			item.TransactionOrigin, item.LinkedEntityID, createdAt, effectiveTime,
 		)
 		if err != nil {
 			return false, err
@@ -810,9 +836,14 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		}
 		item.InvestmentAccountID = accID
 
+		var movementsJSON []byte
+		if item.Movements != nil {
+			movementsJSON, _ = json.Marshal(item.Movements)
+		}
+
 		query := `
-			INSERT INTO investment_items (id, user_id, investment_account_id, name, group_name, balance, show_in_consolidated, icon_symbol, color_hex, notes, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			INSERT INTO investment_items (id, user_id, investment_account_id, name, group_name, balance, show_in_consolidated, icon_symbol, color_hex, notes, movements, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			ON CONFLICT (id) DO UPDATE SET
 				investment_account_id = EXCLUDED.investment_account_id,
 				name = EXCLUDED.name,
@@ -822,11 +853,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				icon_symbol = EXCLUDED.icon_symbol,
 				color_hex = EXCLUDED.color_hex,
 				notes = EXCLUDED.notes,
+				movements = EXCLUDED.movements,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE investment_items.updated_at <= EXCLUDED.updated_at;
 		`
-		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, createdAt, effectiveTime)
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, movementsJSON, createdAt, effectiveTime)
 		if err != nil {
 			return false, err
 		}
@@ -863,14 +895,27 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			}
 		}
 
+		var financingDetailsJSON, loanDetailsJSON, amortizationHistoryJSON []byte
+		if item.FinancingDetails != nil {
+			financingDetailsJSON, _ = json.Marshal(item.FinancingDetails)
+		}
+		if item.LoanDetails != nil {
+			loanDetailsJSON, _ = json.Marshal(item.LoanDetails)
+		}
+		if item.AmortizationHistory != nil {
+			amortizationHistoryJSON, _ = json.Marshal(item.AmortizationHistory)
+		}
+
 		query := `
 			INSERT INTO credit_contracts (
 				id, user_id, account_id, category_id, kind, name, contract_number, loan_subtype, financing_subtype,
 				amortization_system, total_contracted_amount, outstanding_balance, installment_amount, billing_day,
-				total_installments, monthly_interest_rate, start_date, past_installments_elapsed_at_creation,
-				extra_amortized_total, is_settled, settled_amount, settled_date, settled_account_id, notes, created_at, updated_at
+				total_installments, original_total_installments, monthly_interest_rate, annual_nominal_interest_rate,
+				indexation_rate, admin_fee, insurance_fee, base_installment_amount, financing_details, loan_details,
+				amortization_history, start_date, past_installments_elapsed_at_creation, extra_amortized_total,
+				is_settled, settled_amount, settled_date, settled_account_id, notes, created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
 			ON CONFLICT (id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				category_id = EXCLUDED.category_id,
@@ -885,7 +930,16 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				installment_amount = EXCLUDED.installment_amount,
 				billing_day = EXCLUDED.billing_day,
 				total_installments = EXCLUDED.total_installments,
+				original_total_installments = EXCLUDED.original_total_installments,
 				monthly_interest_rate = EXCLUDED.monthly_interest_rate,
+				annual_nominal_interest_rate = EXCLUDED.annual_nominal_interest_rate,
+				indexation_rate = EXCLUDED.indexation_rate,
+				admin_fee = EXCLUDED.admin_fee,
+				insurance_fee = EXCLUDED.insurance_fee,
+				base_installment_amount = EXCLUDED.base_installment_amount,
+				financing_details = EXCLUDED.financing_details,
+				loan_details = EXCLUDED.loan_details,
+				amortization_history = EXCLUDED.amortization_history,
 				start_date = EXCLUDED.start_date,
 				past_installments_elapsed_at_creation = EXCLUDED.past_installments_elapsed_at_creation,
 				extra_amortized_total = EXCLUDED.extra_amortized_total,
@@ -901,8 +955,69 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		tag, err := tx.Exec(ctx, query,
 			item.ID, item.UserID, item.AccountID, item.CategoryID, item.Kind, item.Name, item.ContractNumber, item.LoanSubtype, item.FinancingSubtype,
 			item.AmortizationSystem, item.TotalContractedAmount, item.OutstandingBalance, item.InstallmentAmount, item.BillingDay,
-			item.TotalInstallments, item.MonthlyInterestRate, item.StartDate, item.PastInstallmentsElapsedAtCreation,
-			item.ExtraAmortizedTotal, item.IsSettled, item.SettledAmount, item.SettledDate, item.SettledAccountID, item.Notes, createdAt, effectiveTime,
+			item.TotalInstallments, item.OriginalTotalInstallments, item.MonthlyInterestRate, item.AnnualNominalInterestRate,
+			item.IndexationRate, item.AdminFee, item.InsuranceFee, item.BaseInstallmentAmount, financingDetailsJSON, loanDetailsJSON,
+			amortizationHistoryJSON, item.StartDate, item.PastInstallmentsElapsedAtCreation, item.ExtraAmortizedTotal,
+			item.IsSettled, item.SettledAmount, item.SettledDate, item.SettledAccountID, item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "amortization_records":
+		var item models.AmortizationRecord
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
+		if err != nil {
+			return false, fmt.Errorf("amortization record account validation failed: %w", err)
+		}
+		item.AccountID = accID
+		if item.TransactionID != nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM financial_transactions WHERE id = $1 AND user_id = $2)", *item.TransactionID, userID).Scan(&exists)
+			if !exists {
+				item.TransactionID = nil
+			}
+		}
+
+		query := `
+			INSERT INTO amortization_records (
+				id, user_id, contract_id, account_id, transaction_id, date, amount_paid, mode,
+				previous_installment_amount, new_installment_amount, previous_remaining_installments,
+				new_remaining_installments, effective_amortization, previous_balance, notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			ON CONFLICT (id) DO UPDATE SET
+				contract_id = EXCLUDED.contract_id,
+				account_id = EXCLUDED.account_id,
+				transaction_id = EXCLUDED.transaction_id,
+				date = EXCLUDED.date,
+				amount_paid = EXCLUDED.amount_paid,
+				mode = EXCLUDED.mode,
+				previous_installment_amount = EXCLUDED.previous_installment_amount,
+				new_installment_amount = EXCLUDED.new_installment_amount,
+				previous_remaining_installments = EXCLUDED.previous_remaining_installments,
+				new_remaining_installments = EXCLUDED.new_remaining_installments,
+				effective_amortization = EXCLUDED.effective_amortization,
+				previous_balance = EXCLUDED.previous_balance,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE amortization_records.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.ContractID, item.AccountID, item.TransactionID, item.Date, item.AmountPaid, item.Mode,
+			item.PreviousInstallmentAmount, item.NewInstallmentAmount, item.PreviousRemainingInstallments,
+			item.NewRemainingInstallments, item.EffectiveAmortization, item.PreviousBalance, item.Notes, createdAt, effectiveTime,
 		)
 		if err != nil {
 			return false, err

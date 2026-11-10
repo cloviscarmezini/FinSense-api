@@ -69,6 +69,8 @@ type FinancialTransaction struct {
 	LinkedQuotaID              *uuid.UUID `json:"linked_quota_id,omitempty"`
 	LinkedQuotaUnits           *int       `json:"linked_quota_units,omitempty"`
 	LinkedQuotaYearMonthKey    *int       `json:"linked_quota_year_month_key,omitempty"`
+	TransactionOrigin          *string    `json:"transaction_origin,omitempty"`
+	LinkedEntityID             *uuid.UUID `json:"linked_entity_id,omitempty"`
 	CreatedAt                  time.Time  `json:"created_at"`
 	UpdatedAt                  time.Time  `json:"updated_at"`
 	DeletedAt                  *time.Time `json:"deleted_at,omitempty"`
@@ -85,8 +87,9 @@ type InvestmentItem struct {
 	ShowInConsolidated   bool       `json:"show_in_consolidated"`
 	IconSymbol           string     `json:"icon_symbol"`
 	ColorHex             string     `json:"color_hex"`
-	Notes                string     `json:"notes"`
-	CreatedAt            time.Time  `json:"created_at"`
+	Notes                string      `json:"notes"`
+	Movements            interface{} `json:"movements,omitempty"`
+	CreatedAt            time.Time   `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
 }
@@ -124,9 +127,18 @@ type CreditContract struct {
 	OutstandingBalance                *float64   `json:"outstanding_balance,omitempty"`
 	InstallmentAmount                 float64    `json:"installment_amount"`
 	BillingDay                        int        `json:"billing_day"`
-	TotalInstallments                 int        `json:"total_installments"`
-	MonthlyInterestRate               float64    `json:"monthly_interest_rate"`
-	StartDate                         *time.Time `json:"start_date,omitempty"`
+	TotalInstallments                 int         `json:"total_installments"`
+	OriginalTotalInstallments         *int        `json:"original_total_installments,omitempty"`
+	MonthlyInterestRate               float64     `json:"monthly_interest_rate"`
+	AnnualNominalInterestRate         *float64    `json:"annual_nominal_interest_rate,omitempty"`
+	IndexationRate                    *string     `json:"indexation_rate,omitempty"`
+	AdminFee                          *float64    `json:"admin_fee,omitempty"`
+	InsuranceFee                      *float64    `json:"insurance_fee,omitempty"`
+	BaseInstallmentAmount             *float64    `json:"base_installment_amount,omitempty"`
+	FinancingDetails                  interface{} `json:"financing_details,omitempty"`
+	LoanDetails                       interface{} `json:"loan_details,omitempty"`
+	AmortizationHistory               interface{} `json:"amortization_history,omitempty"`
+	StartDate                         *time.Time  `json:"start_date,omitempty"`
 	PastInstallmentsElapsedAtCreation int        `json:"past_installments_elapsed_at_creation"`
 	ExtraAmortizedTotal               float64    `json:"extra_amortized_total"`
 	IsSettled                         bool       `json:"is_settled"`
@@ -152,8 +164,10 @@ type AmortizationRecord struct {
 	PreviousInstallmentAmount    float64    `json:"previous_installment_amount"`
 	NewInstallmentAmount         float64    `json:"new_installment_amount"`
 	PreviousRemainingInstallments int       `json:"previous_remaining_installments"`
-	NewRemainingInstallments     int        `json:"new_remaining_installments"`
-	Notes                        string     `json:"notes"`
+	NewRemainingInstallments      int       `json:"new_remaining_installments"`
+	EffectiveAmortization         *float64  `json:"effective_amortization,omitempty"`
+	PreviousBalance               *float64  `json:"previous_balance,omitempty"`
+	Notes                         string    `json:"notes"`
 	CreatedAt                    time.Time  `json:"created_at"`
 	UpdatedAt                    time.Time  `json:"updated_at"`
 	DeletedAt                    *time.Time `json:"deleted_at,omitempty"`

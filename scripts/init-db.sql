@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS financial_transactions (
     linked_quota_id UUID,
     linked_quota_units INT,
     linked_quota_year_month_key INT,
+    transaction_origin VARCHAR(50),
+    linked_entity_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
@@ -127,6 +129,7 @@ CREATE TABLE IF NOT EXISTS investment_items (
     icon_symbol VARCHAR(100) NOT NULL DEFAULT 'chart.line.uptrend.xyaxis',
     color_hex VARCHAR(9) NOT NULL DEFAULT '#10B981',
     notes TEXT NOT NULL DEFAULT '',
+    movements JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
@@ -167,7 +170,16 @@ CREATE TABLE IF NOT EXISTS credit_contracts (
     installment_amount NUMERIC(15, 2) NOT NULL,
     billing_day INT NOT NULL CHECK (billing_day BETWEEN 1 AND 31),
     total_installments INT NOT NULL CHECK (total_installments >= 1),
+    original_total_installments INT,
     monthly_interest_rate NUMERIC(8, 4) NOT NULL DEFAULT 0.0000,
+    annual_nominal_interest_rate NUMERIC(8, 4),
+    indexation_rate VARCHAR(50),
+    admin_fee NUMERIC(15, 2),
+    insurance_fee NUMERIC(15, 2),
+    base_installment_amount NUMERIC(15, 2),
+    financing_details JSONB,
+    loan_details JSONB,
+    amortization_history JSONB,
     start_date TIMESTAMPTZ,
     past_installments_elapsed_at_creation INT NOT NULL DEFAULT 0,
     extra_amortized_total NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
@@ -194,6 +206,8 @@ CREATE TABLE IF NOT EXISTS amortization_records (
     new_installment_amount NUMERIC(15, 2) NOT NULL,
     previous_remaining_installments INT NOT NULL,
     new_remaining_installments INT NOT NULL,
+    effective_amortization NUMERIC(15, 2),
+    previous_balance NUMERIC(15, 2),
     notes TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -298,3 +312,21 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
 );
+
+-- 12. Rastreamento e Registro de Sessões Ativas por Dispositivo (Multi-Dispositivos)
+CREATE TABLE IF NOT EXISTS user_device_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id VARCHAR(100) NOT NULL,
+    platform VARCHAR(50) NOT NULL,
+    app_version VARCHAR(50) NOT NULL DEFAULT '1.0.0',
+    device_name VARCHAR(150),
+    refresh_token_hash VARCHAR(255),
+    ip_address VARCHAR(50),
+    last_access_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_device_sessions_user ON user_device_sessions(user_id);
+
