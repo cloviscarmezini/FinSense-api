@@ -62,8 +62,10 @@ func SetupRouter(deps *RouterDependencies) http.Handler {
 		v1.Group(func(protected chi.Router) {
 			protected.Use(middleware.Auth(deps.Config))
 
-			// Auth / User
+			// Auth / User & Multi-Device Sessions
 			protected.Post("/auth/logout", authHandler.Logout)
+			protected.Get("/auth/sessions", authHandler.ListSessions)
+			protected.Delete("/auth/sessions/{id}", authHandler.RevokeSession)
 			protected.Get("/user/me", authHandler.Me)
 
 			// Two-Way Sync

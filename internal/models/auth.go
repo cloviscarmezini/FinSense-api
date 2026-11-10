@@ -18,18 +18,43 @@ type User struct {
 }
 
 type RegisterRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	FullName string `json:"full_name"`
+	Email      string  `json:"email"`
+	Password   string  `json:"password"`
+	FullName   string  `json:"full_name"`
+	DeviceID   *string `json:"device_id,omitempty"`
+	Platform   *string `json:"platform,omitempty"`
+	AppVersion *string `json:"app_version,omitempty"`
+	DeviceName *string `json:"device_name,omitempty"`
 }
 
 type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email      string  `json:"email"`
+	Password   string  `json:"password"`
+	DeviceID   *string `json:"device_id,omitempty"`
+	Platform   *string `json:"platform,omitempty"`
+	AppVersion *string `json:"app_version,omitempty"`
+	DeviceName *string `json:"device_name,omitempty"`
 }
 
 type RefreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string  `json:"refresh_token"`
+	DeviceID     *string `json:"device_id,omitempty"`
+	Platform     *string `json:"platform,omitempty"`
+	AppVersion   *string `json:"app_version,omitempty"`
+	DeviceName   *string `json:"device_name,omitempty"`
+}
+
+type DeviceSession struct {
+	ID           uuid.UUID `json:"id"`
+	UserID       uuid.UUID `json:"user_id"`
+	DeviceID     string    `json:"device_id"`
+	Platform     string    `json:"platform"`
+	AppVersion   string    `json:"app_version"`
+	DeviceName   *string   `json:"device_name,omitempty"`
+	IPAddress    *string   `json:"ip_address,omitempty"`
+	LastAccessAt time.Time `json:"last_access_at"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type UserSummary struct {
