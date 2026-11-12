@@ -216,7 +216,7 @@ type CategoryQuotaRule struct {
 	ID                    uuid.UUID              `json:"id"`
 	SeriesID              uuid.UUID              `json:"series_id"`
 	UserID                uuid.UUID              `json:"user_id"`
-	CategoryID            uuid.UUID              `json:"category_id"`
+	CategoryID            *uuid.UUID             `json:"category_id,omitempty"`
 	Name                  string                 `json:"name"`
 	IconSymbol            string                 `json:"icon_symbol"`
 	Year                  int                    `json:"year"`
@@ -226,6 +226,8 @@ type CategoryQuotaRule struct {
 	RepeatForFutureMonths bool                   `json:"repeat_for_future_months"`
 	MonthlyOverrides      map[string]interface{} `json:"monthly_overrides,omitempty"`
 	ExcludedYearMonthKeys []int                  `json:"excluded_year_month_keys,omitempty"`
+	QuotaType             string                 `json:"quota_type"`
+	LinkedInvestmentID    *uuid.UUID             `json:"linked_investment_id,omitempty"`
 	CreatedAt             time.Time              `json:"created_at"`
 	UpdatedAt             time.Time              `json:"updated_at"`
 	DeletedAt             *time.Time             `json:"deleted_at,omitempty"`

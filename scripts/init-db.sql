@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS category_quota_rules (
     id UUID PRIMARY KEY,
     series_id UUID NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    category_id UUID REFERENCES categories(id) ON DELETE CASCADE,
     name VARCHAR(150) NOT NULL,
     icon_symbol VARCHAR(100) NOT NULL DEFAULT 'shippingbox.fill',
     year INT NOT NULL,
@@ -266,6 +266,8 @@ CREATE TABLE IF NOT EXISTS category_quota_rules (
     repeat_for_future_months BOOLEAN NOT NULL DEFAULT TRUE,
     monthly_overrides JSONB,
     excluded_year_month_keys INT[],
+    quota_type VARCHAR(50) NOT NULL DEFAULT 'expense',
+    linked_investment_id UUID REFERENCES investment_items(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ

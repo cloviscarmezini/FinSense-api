@@ -706,7 +706,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		}
 		if item.LinkedQuotaID != nil {
 			var exists bool
-			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM category_quota_rules WHERE id = $1 AND user_id = $2)", *item.LinkedQuotaID, userID).Scan(&exists)
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM category_quota_rules WHERE (id = $1 OR series_id = $1) AND user_id = $2)", *item.LinkedQuotaID, userID).Scan(&exists)
 			if !exists {
 				item.LinkedQuotaID = nil
 			}
@@ -1073,15 +1073,46 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		if !item.CreatedAt.IsZero() {
 			createdAt = item.CreatedAt.UTC()
 		}
-		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, "expense")
-		if err != nil {
-			return false, fmt.Errorf("quota category validation failed: %w", err)
+
+		quotaType := item.QuotaType
+		if quotaType == "" {
+			quotaType = "expense"
 		}
-		item.CategoryID = catID
+		item.QuotaType = quotaType
+
+		var categoryID *uuid.UUID
+		if item.CategoryID != nil && *item.CategoryID != uuid.Nil {
+			catID, err := s.getOrFallbackCategory(ctx, tx, userID, *item.CategoryID, "expense")
+			if err == nil {
+				categoryID = &catID
+			}
+		} else if quotaType == "expense" {
+			catID, err := s.getOrFallbackCategory(ctx, tx, userID, uuid.Nil, "expense")
+			if err != nil {
+				return false, fmt.Errorf("quota category validation failed: %w", err)
+			}
+			categoryID = &catID
+		}
+		item.CategoryID = categoryID
+
+		if item.LinkedInvestmentID != nil && *item.LinkedInvestmentID != uuid.Nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM investment_items WHERE id = $1 AND user_id = $2)", *item.LinkedInvestmentID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedInvestmentID = nil
+			}
+		} else {
+			item.LinkedInvestmentID = nil
+		}
 
 		query := `
-			INSERT INTO category_quota_rules (id, series_id, user_id, category_id, name, icon_symbol, year, month, planned_quantity, estimated_unit_price, repeat_for_future_months, monthly_overrides, excluded_year_month_keys, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			INSERT INTO category_quota_rules (
+				id, series_id, user_id, category_id, name, icon_symbol, year, month,
+				planned_quantity, estimated_unit_price, repeat_for_future_months,
+				monthly_overrides, excluded_year_month_keys, quota_type, linked_investment_id,
+				created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			ON CONFLICT (id) DO UPDATE SET
 				series_id = EXCLUDED.series_id,
 				category_id = EXCLUDED.category_id,
@@ -1094,11 +1125,18 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				repeat_for_future_months = EXCLUDED.repeat_for_future_months,
 				monthly_overrides = EXCLUDED.monthly_overrides,
 				excluded_year_month_keys = EXCLUDED.excluded_year_month_keys,
+				quota_type = EXCLUDED.quota_type,
+				linked_investment_id = EXCLUDED.linked_investment_id,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE category_quota_rules.updated_at <= EXCLUDED.updated_at;
 		`
-		tag, err := tx.Exec(ctx, query, item.ID, item.SeriesID, item.UserID, item.CategoryID, item.Name, item.IconSymbol, item.Year, item.Month, item.PlannedQuantity, item.EstimatedUnitPrice, item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys, createdAt, effectiveTime)
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.SeriesID, item.UserID, item.CategoryID, item.Name, item.IconSymbol,
+			item.Year, item.Month, item.PlannedQuantity, item.EstimatedUnitPrice,
+			item.RepeatForFutureMonths, item.MonthlyOverrides, item.ExcludedYearMonthKeys,
+			item.QuotaType, item.LinkedInvestmentID, createdAt, effectiveTime,
+		)
 		if err != nil {
 			return false, err
 		}
