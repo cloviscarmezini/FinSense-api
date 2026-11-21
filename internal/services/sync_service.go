@@ -67,7 +67,7 @@ func normalizeEntityData(data map[string]interface{}) map[string]interface{} {
 func entityPriority(entityName string, op models.OperationType) int {
 	if op == models.OpDelete {
 		switch entityName {
-		case "financial_transactions":
+		case "financial_transactions", "amortization_plans":
 			return 1
 		case "category_quota_rules", "category_provisions", "credit_contracts", "investment_items", "debt_items":
 			return 2
@@ -86,7 +86,7 @@ func entityPriority(entityName string, op models.OperationType) int {
 			return 2
 		case "credit_contracts", "investment_items", "debt_items":
 			return 3
-		case "category_provisions", "category_quota_rules":
+		case "category_provisions", "category_quota_rules", "amortization_plans":
 			return 4
 		case "financial_transactions":
 			return 5
@@ -293,6 +293,8 @@ func initEmptyDeltas() map[string]interface{} {
 		"debtItems":              []interface{}{},
 		"credit_contracts":       []interface{}{},
 		"creditContracts":        []interface{}{},
+		"amortization_plans":     []interface{}{},
+		"amortizationPlans":      []interface{}{},
 		"category_provisions":    []interface{}{},
 		"categoryProvisions":     []interface{}{},
 		"category_quota_rules":   []interface{}{},
@@ -319,6 +321,9 @@ func appendToDeltas(deltas map[string]interface{}, entityName string, data map[s
 	case "credit_contracts":
 		deltas["credit_contracts"] = append(deltas["credit_contracts"].([]interface{}), data)
 		deltas["creditContracts"] = append(deltas["creditContracts"].([]interface{}), data)
+	case "amortization_plans":
+		deltas["amortization_plans"] = append(deltas["amortization_plans"].([]interface{}), data)
+		deltas["amortizationPlans"] = append(deltas["amortizationPlans"].([]interface{}), data)
 	case "category_provisions":
 		deltas["category_provisions"] = append(deltas["category_provisions"].([]interface{}), data)
 		deltas["categoryProvisions"] = append(deltas["categoryProvisions"].([]interface{}), data)
@@ -343,6 +348,7 @@ func (s *SyncService) GetAllActiveEntities(ctx context.Context, userID uuid.UUID
 		"investment_items",
 		"debt_items",
 		"credit_contracts",
+		"amortization_plans",
 		"category_provisions",
 		"category_quota_rules",
 	}
@@ -563,6 +569,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		"debt_items":             true,
 		"investment_items":       true,
 		"credit_contracts":       true,
+		"amortization_plans":     true,
 		"category_provisions":    true,
 		"category_quota_rules":   true,
 	}
@@ -719,9 +726,11 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				is_canceled_recurring_series, series_group_id, installment_index, installment_total,
 				raw_statement_line, statement_occurrence_index, linked_contract_id, linked_investment_id,
 				linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
-				transaction_origin, linked_entity_id, created_at, updated_at
+				transaction_origin, linked_entity_id,
+				base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
+				created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
 			ON CONFLICT (id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				category_id = EXCLUDED.category_id,
@@ -750,6 +759,9 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				linked_quota_year_month_key = EXCLUDED.linked_quota_year_month_key,
 				transaction_origin = EXCLUDED.transaction_origin,
 				linked_entity_id = EXCLUDED.linked_entity_id,
+				base_installment_registered_amount = EXCLUDED.base_installment_registered_amount,
+				projected_installment_correction_amount = EXCLUDED.projected_installment_correction_amount,
+				confirmed_real_interest_correction_amount = EXCLUDED.confirmed_real_interest_correction_amount,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE financial_transactions.updated_at <= EXCLUDED.updated_at;
@@ -760,7 +772,9 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.IsCanceledRecurringSeries, item.SeriesGroupID, item.InstallmentIndex, item.InstallmentTotal,
 			item.RawStatementLine, item.StatementOccurrenceIndex, item.LinkedContractID, item.LinkedInvestmentID,
 			item.LinkedDebtID, item.LinkedQuotaID, item.LinkedQuotaUnits, item.LinkedQuotaYearMonthKey,
-			item.TransactionOrigin, item.LinkedEntityID, createdAt, effectiveTime,
+			item.TransactionOrigin, item.LinkedEntityID,
+			item.BaseInstallmentRegisteredAmount, item.ProjectedInstallmentCorrectionAmount, item.ConfirmedRealInterestCorrectionAmount,
+			createdAt, effectiveTime,
 		)
 		if err != nil {
 			return false, err
@@ -895,7 +909,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			}
 		}
 
-		var financingDetailsJSON, loanDetailsJSON, amortizationHistoryJSON []byte
+		var financingDetailsJSON, loanDetailsJSON, amortizationHistoryJSON, scheduledInstallmentsJSON []byte
 		if item.FinancingDetails != nil {
 			financingDetailsJSON, _ = json.Marshal(item.FinancingDetails)
 		}
@@ -905,6 +919,9 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		if item.AmortizationHistory != nil {
 			amortizationHistoryJSON, _ = json.Marshal(item.AmortizationHistory)
 		}
+		if item.ScheduledInstallments != nil {
+			scheduledInstallmentsJSON, _ = json.Marshal(item.ScheduledInstallments)
+		}
 
 		query := `
 			INSERT INTO credit_contracts (
@@ -913,9 +930,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				total_installments, original_total_installments, monthly_interest_rate, annual_nominal_interest_rate,
 				indexation_rate, admin_fee, insurance_fee, base_installment_amount, financing_details, loan_details,
 				amortization_history, start_date, past_installments_elapsed_at_creation, extra_amortized_total,
-				is_settled, settled_amount, settled_date, settled_account_id, notes, created_at, updated_at
+				is_settled, settled_amount, settled_date, settled_account_id,
+				bank_due_day, reference_date, maturity_date, estimated_monthly_tr, last_fgts_usage_date,
+				scheduled_installments, average_monthly_installment_growth,
+				notes, created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42)
 			ON CONFLICT (id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				category_id = EXCLUDED.category_id,
@@ -947,6 +967,13 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				settled_amount = EXCLUDED.settled_amount,
 				settled_date = EXCLUDED.settled_date,
 				settled_account_id = EXCLUDED.settled_account_id,
+				bank_due_day = EXCLUDED.bank_due_day,
+				reference_date = EXCLUDED.reference_date,
+				maturity_date = EXCLUDED.maturity_date,
+				estimated_monthly_tr = EXCLUDED.estimated_monthly_tr,
+				last_fgts_usage_date = EXCLUDED.last_fgts_usage_date,
+				scheduled_installments = EXCLUDED.scheduled_installments,
+				average_monthly_installment_growth = EXCLUDED.average_monthly_installment_growth,
 				notes = EXCLUDED.notes,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
@@ -958,7 +985,75 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.TotalInstallments, item.OriginalTotalInstallments, item.MonthlyInterestRate, item.AnnualNominalInterestRate,
 			item.IndexationRate, item.AdminFee, item.InsuranceFee, item.BaseInstallmentAmount, financingDetailsJSON, loanDetailsJSON,
 			amortizationHistoryJSON, item.StartDate, item.PastInstallmentsElapsedAtCreation, item.ExtraAmortizedTotal,
-			item.IsSettled, item.SettledAmount, item.SettledDate, item.SettledAccountID, item.Notes, createdAt, effectiveTime,
+			item.IsSettled, item.SettledAmount, item.SettledDate, item.SettledAccountID,
+			item.BankDueDay, item.ReferenceDate, item.MaturityDate, item.EstimatedMonthlyTR, item.LastFGTSUsageDate,
+			scheduledInstallmentsJSON, item.AverageMonthlyInstallmentGrowth,
+			item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "amortization_plans":
+		var item models.AmortizationPlan
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.GenerationMode == "" {
+			item.GenerationMode = "Manual"
+		}
+		if item.BillingDay < 1 || item.BillingDay > 31 {
+			item.BillingDay = 26
+		}
+		if item.IncomeCommitmentPercentage <= 0 {
+			item.IncomeCommitmentPercentage = 30.0
+		}
+		if item.DefaultRecalculationMode == "" {
+			item.DefaultRecalculationMode = "Reduzir Prazo (Quantidade de Parcelas)"
+		}
+
+		// Verify contract exists for user
+		var contractExists bool
+		_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM credit_contracts WHERE id = $1 AND user_id = $2)", item.ContractID, userID).Scan(&contractExists)
+		if !contractExists {
+			return false, nil
+		}
+
+		var itemsJSON []byte
+		if item.Items != nil {
+			itemsJSON, _ = json.Marshal(item.Items)
+		}
+
+		query := `
+			INSERT INTO amortization_plans (
+				id, user_id, contract_id, generation_mode, billing_day,
+				income_commitment_percentage, default_recalculation_mode, estimated_monthly_tr,
+				items, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT (id) DO UPDATE SET
+				contract_id = EXCLUDED.contract_id,
+				generation_mode = EXCLUDED.generation_mode,
+				billing_day = EXCLUDED.billing_day,
+				income_commitment_percentage = EXCLUDED.income_commitment_percentage,
+				default_recalculation_mode = EXCLUDED.default_recalculation_mode,
+				estimated_monthly_tr = EXCLUDED.estimated_monthly_tr,
+				items = EXCLUDED.items,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE amortization_plans.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.ContractID, item.GenerationMode, item.BillingDay,
+			item.IncomeCommitmentPercentage, item.DefaultRecalculationMode, item.EstimatedMonthlyTR,
+			itemsJSON, createdAt, effectiveTime,
 		)
 		if err != nil {
 			return false, err
@@ -1182,6 +1277,7 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 	if resetAll {
 		tablesToDelete = []string{
 			"sync_changelog",
+			"amortization_plans",
 			"amortization_records",
 			"investment_movements",
 			"financial_transactions",
@@ -1205,13 +1301,15 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 		}
 		if targetSet["loans"] || targetSet["financings"] || targetSet["credit_contracts"] {
 			if targetSet["loans"] && !targetSet["financings"] {
+				_, _ = tx.Exec(ctx, "DELETE FROM amortization_plans WHERE contract_id IN (SELECT id FROM credit_contracts WHERE user_id = $1 AND kind = 'loan')", userID)
 				_, _ = tx.Exec(ctx, "DELETE FROM amortization_records WHERE contract_id IN (SELECT id FROM credit_contracts WHERE user_id = $1 AND kind = 'loan')", userID)
 				_, _ = tx.Exec(ctx, "DELETE FROM credit_contracts WHERE user_id = $1 AND kind = 'loan'", userID)
 			} else if targetSet["financings"] && !targetSet["loans"] {
+				_, _ = tx.Exec(ctx, "DELETE FROM amortization_plans WHERE contract_id IN (SELECT id FROM credit_contracts WHERE user_id = $1 AND kind = 'financing')", userID)
 				_, _ = tx.Exec(ctx, "DELETE FROM amortization_records WHERE contract_id IN (SELECT id FROM credit_contracts WHERE user_id = $1 AND kind = 'financing')", userID)
 				_, _ = tx.Exec(ctx, "DELETE FROM credit_contracts WHERE user_id = $1 AND kind = 'financing'", userID)
 			} else {
-				tablesToDelete = append(tablesToDelete, "amortization_records", "credit_contracts")
+				tablesToDelete = append(tablesToDelete, "amortization_plans", "amortization_records", "credit_contracts")
 			}
 		}
 		if targetSet["debts"] || targetSet["debt_items"] {
@@ -1290,16 +1388,22 @@ func (s *SyncService) CreateTransaction(ctx context.Context, userID uuid.UUID, t
 			attachment_path, attachment_name, ignore_in_consolidated, recurrence_mode, recurrence_frequency,
 			is_canceled_recurring_series, series_group_id, installment_index, installment_total,
 			raw_statement_line, statement_occurrence_index, linked_contract_id, linked_investment_id,
-			linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key, created_at, updated_at
+			linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
+			transaction_origin, linked_entity_id,
+			base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
+			created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
 	`
 	_, err = conn.Exec(ctx, query,
 		tx.ID, tx.UserID, tx.AccountID, tx.CategoryID, tx.Name, tx.Details, tx.Amount, tx.Date, tx.Type, tx.IsPaid,
 		tx.AttachmentPath, tx.AttachmentName, tx.IgnoreInConsolidated, tx.RecurrenceMode, tx.RecurrenceFrequency,
 		tx.IsCanceledRecurringSeries, tx.SeriesGroupID, tx.InstallmentIndex, tx.InstallmentTotal,
 		tx.RawStatementLine, tx.StatementOccurrenceIndex, tx.LinkedContractID, tx.LinkedInvestmentID,
-		tx.LinkedDebtID, tx.LinkedQuotaID, tx.LinkedQuotaUnits, tx.LinkedQuotaYearMonthKey, tx.CreatedAt, tx.UpdatedAt,
+		tx.LinkedDebtID, tx.LinkedQuotaID, tx.LinkedQuotaUnits, tx.LinkedQuotaYearMonthKey,
+		tx.TransactionOrigin, tx.LinkedEntityID,
+		tx.BaseInstallmentRegisteredAmount, tx.ProjectedInstallmentCorrectionAmount, tx.ConfirmedRealInterestCorrectionAmount,
+		tx.CreatedAt, tx.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert transaction: %w", err)
@@ -1361,7 +1465,10 @@ func (s *SyncService) ListTransactions(ctx context.Context, userID uuid.UUID) ([
 			attachment_path, attachment_name, ignore_in_consolidated, recurrence_mode, recurrence_frequency,
 			is_canceled_recurring_series, series_group_id, installment_index, installment_total,
 			raw_statement_line, statement_occurrence_index, linked_contract_id, linked_investment_id,
-			linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key, created_at, updated_at
+			linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
+			transaction_origin, linked_entity_id,
+			base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
+			created_at, updated_at
 		FROM financial_transactions
 		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY date DESC
@@ -1380,7 +1487,10 @@ func (s *SyncService) ListTransactions(ctx context.Context, userID uuid.UUID) ([
 			&tx.AttachmentPath, &tx.AttachmentName, &tx.IgnoreInConsolidated, &tx.RecurrenceMode, &tx.RecurrenceFrequency,
 			&tx.IsCanceledRecurringSeries, &tx.SeriesGroupID, &tx.InstallmentIndex, &tx.InstallmentTotal,
 			&tx.RawStatementLine, &tx.StatementOccurrenceIndex, &tx.LinkedContractID, &tx.LinkedInvestmentID,
-			&tx.LinkedDebtID, &tx.LinkedQuotaID, &tx.LinkedQuotaUnits, &tx.LinkedQuotaYearMonthKey, &tx.CreatedAt, &tx.UpdatedAt,
+			&tx.LinkedDebtID, &tx.LinkedQuotaID, &tx.LinkedQuotaUnits, &tx.LinkedQuotaYearMonthKey,
+			&tx.TransactionOrigin, &tx.LinkedEntityID,
+			&tx.BaseInstallmentRegisteredAmount, &tx.ProjectedInstallmentCorrectionAmount, &tx.ConfirmedRealInterestCorrectionAmount,
+			&tx.CreatedAt, &tx.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err

@@ -69,11 +69,14 @@ type FinancialTransaction struct {
 	LinkedQuotaID              *uuid.UUID `json:"linked_quota_id,omitempty"`
 	LinkedQuotaUnits           *int       `json:"linked_quota_units,omitempty"`
 	LinkedQuotaYearMonthKey    *int       `json:"linked_quota_year_month_key,omitempty"`
-	TransactionOrigin          *string    `json:"transaction_origin,omitempty"`
-	LinkedEntityID             *uuid.UUID `json:"linked_entity_id,omitempty"`
-	CreatedAt                  time.Time  `json:"created_at"`
-	UpdatedAt                  time.Time  `json:"updated_at"`
-	DeletedAt                  *time.Time `json:"deleted_at,omitempty"`
+	TransactionOrigin                     *string    `json:"transaction_origin,omitempty"`
+	LinkedEntityID                        *uuid.UUID `json:"linked_entity_id,omitempty"`
+	BaseInstallmentRegisteredAmount       *float64   `json:"base_installment_registered_amount,omitempty"`
+	ProjectedInstallmentCorrectionAmount  *float64   `json:"projected_installment_correction_amount,omitempty"`
+	ConfirmedRealInterestCorrectionAmount *float64   `json:"confirmed_real_interest_correction_amount,omitempty"`
+	CreatedAt                             time.Time  `json:"created_at"`
+	UpdatedAt                             time.Time  `json:"updated_at"`
+	DeletedAt                             *time.Time `json:"deleted_at,omitempty"`
 }
 
 // InvestmentItem represents an asset portfolio position
@@ -143,12 +146,35 @@ type CreditContract struct {
 	ExtraAmortizedTotal               float64    `json:"extra_amortized_total"`
 	IsSettled                         bool       `json:"is_settled"`
 	SettledAmount                     *float64   `json:"settled_amount,omitempty"`
-	SettledDate                       *time.Time `json:"settled_date,omitempty"`
-	SettledAccountID                  *uuid.UUID `json:"settled_account_id,omitempty"`
-	Notes                             string     `json:"notes"`
-	CreatedAt                         time.Time  `json:"created_at"`
-	UpdatedAt                         time.Time  `json:"updated_at"`
-	DeletedAt                         *time.Time `json:"deleted_at,omitempty"`
+	SettledDate                       *time.Time  `json:"settled_date,omitempty"`
+	SettledAccountID                  *uuid.UUID  `json:"settled_account_id,omitempty"`
+	BankDueDay                        *int        `json:"bank_due_day,omitempty"`
+	ReferenceDate                     *time.Time  `json:"reference_date,omitempty"`
+	MaturityDate                      *time.Time  `json:"maturity_date,omitempty"`
+	EstimatedMonthlyTR                *float64    `json:"estimated_monthly_tr,omitempty"`
+	LastFGTSUsageDate                 *time.Time  `json:"last_fgts_usage_date,omitempty"`
+	ScheduledInstallments             interface{} `json:"scheduled_installments,omitempty"`
+	AverageMonthlyInstallmentGrowth   *float64    `json:"average_monthly_installment_growth,omitempty"`
+	Notes                             string      `json:"notes"`
+	CreatedAt                         time.Time   `json:"created_at"`
+	UpdatedAt                         time.Time   `json:"updated_at"`
+	DeletedAt                         *time.Time  `json:"deleted_at,omitempty"`
+}
+
+// AmortizationPlan represents a dynamic amortization planning configuration (Layer 2) for a credit contract
+type AmortizationPlan struct {
+	ID                         uuid.UUID   `json:"id"`
+	UserID                     uuid.UUID   `json:"user_id"`
+	ContractID                 uuid.UUID   `json:"contract_id"`
+	GenerationMode             string      `json:"generation_mode"`
+	BillingDay                 int         `json:"billing_day"`
+	IncomeCommitmentPercentage float64     `json:"income_commitment_percentage"`
+	DefaultRecalculationMode   string      `json:"default_recalculation_mode"`
+	EstimatedMonthlyTR         float64     `json:"estimated_monthly_tr"`
+	Items                      interface{} `json:"items,omitempty"`
+	CreatedAt                  time.Time   `json:"created_at"`
+	UpdatedAt                  time.Time   `json:"updated_at"`
+	DeletedAt                  *time.Time  `json:"deleted_at,omitempty"`
 }
 
 // AmortizationRecord represents an extraordinary amortization

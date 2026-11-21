@@ -52,6 +52,31 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE category_quota_rules ADD COLUMN IF NOT EXISTS quota_type VARCHAR(50) NOT NULL DEFAULT 'expense';`,
 		`ALTER TABLE category_quota_rules ADD COLUMN IF NOT EXISTS linked_investment_id UUID REFERENCES investment_items(id) ON DELETE SET NULL;`,
 		`ALTER TABLE category_quota_rules ALTER COLUMN category_id DROP NOT NULL;`,
+		`ALTER TABLE financial_transactions ADD COLUMN IF NOT EXISTS base_installment_registered_amount NUMERIC(15, 2);`,
+		`ALTER TABLE financial_transactions ADD COLUMN IF NOT EXISTS projected_installment_correction_amount NUMERIC(15, 2);`,
+		`ALTER TABLE financial_transactions ADD COLUMN IF NOT EXISTS confirmed_real_interest_correction_amount NUMERIC(15, 2);`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS bank_due_day INT;`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS reference_date TIMESTAMPTZ;`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS maturity_date TIMESTAMPTZ;`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS estimated_monthly_tr NUMERIC(8, 4);`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS last_fgts_usage_date TIMESTAMPTZ;`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS scheduled_installments JSONB;`,
+		`ALTER TABLE credit_contracts ADD COLUMN IF NOT EXISTS average_monthly_installment_growth NUMERIC(15, 6);`,
+		`CREATE TABLE IF NOT EXISTS amortization_plans (
+			id UUID PRIMARY KEY,
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			contract_id UUID NOT NULL REFERENCES credit_contracts(id) ON DELETE CASCADE,
+			generation_mode VARCHAR(50) NOT NULL DEFAULT 'Manual',
+			billing_day INT NOT NULL DEFAULT 26,
+			income_commitment_percentage NUMERIC(6, 2) NOT NULL DEFAULT 30.00,
+			default_recalculation_mode VARCHAR(100) NOT NULL DEFAULT 'Reduzir Prazo (Quantidade de Parcelas)',
+			estimated_monthly_tr NUMERIC(8, 4) NOT NULL DEFAULT 0.0000,
+			items JSONB,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			deleted_at TIMESTAMPTZ
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_amortization_plans_user_contract ON amortization_plans(user_id, contract_id) WHERE deleted_at IS NULL;`,
 	}
 
 	for _, stmt := range migrations {
