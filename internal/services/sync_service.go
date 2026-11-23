@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"finsense-api/internal/database"
@@ -16,12 +17,49 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type syncHeadCacheEntry struct {
+	latestRevision int64
+	lastClientID   string
+	expiresAt      time.Time
+}
+
 type SyncService struct {
-	db *database.DB
+	db        *database.DB
+	headMu    sync.RWMutex
+	headCache map[uuid.UUID]syncHeadCacheEntry
 }
 
 func NewSyncService(db *database.DB) *SyncService {
-	return &SyncService{db: db}
+	return &SyncService{
+		db:        db,
+		headCache: make(map[uuid.UUID]syncHeadCacheEntry),
+	}
+}
+
+func (s *SyncService) invalidateHeadCache(userID uuid.UUID) {
+	s.headMu.Lock()
+	delete(s.headCache, userID)
+	s.headMu.Unlock()
+}
+
+func (s *SyncService) getHeadCache(userID uuid.UUID) (syncHeadCacheEntry, bool) {
+	s.headMu.RLock()
+	entry, ok := s.headCache[userID]
+	s.headMu.RUnlock()
+	if !ok || time.Now().After(entry.expiresAt) {
+		return syncHeadCacheEntry{}, false
+	}
+	return entry, true
+}
+
+func (s *SyncService) setHeadCache(userID uuid.UUID, latestRevision int64, lastClientID string) {
+	s.headMu.Lock()
+	s.headCache[userID] = syncHeadCacheEntry{
+		latestRevision: latestRevision,
+		lastClientID:   lastClientID,
+		expiresAt:      time.Now().Add(5 * time.Second),
+	}
+	s.headMu.Unlock()
 }
 
 var (
@@ -198,6 +236,9 @@ func (s *SyncService) PushPull(ctx context.Context, userID uuid.UUID, req models
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	if len(appliedIDs) > 0 {
+		s.invalidateHeadCache(userID)
 	}
 
 	// Fetch server changes since since_revision (excluding the mutations just applied in this request)
@@ -495,6 +536,84 @@ func (s *SyncService) GetDeltaWithContainers(ctx context.Context, userID uuid.UU
 func (s *SyncService) GetDelta(ctx context.Context, userID uuid.UUID, clientID string, sinceRev int64) ([]models.Mutation, int64, error) {
 	changes, currentLatest, _, _, err := s.GetDeltaWithContainers(ctx, userID, nil, sinceRev)
 	return changes, currentLatest, err
+}
+
+// CheckSyncStatus returns an O(1) summary indicating whether the cloud has revisions newer than sinceRev for other clients.
+func (s *SyncService) CheckSyncStatus(ctx context.Context, userID uuid.UUID, clientID string, sinceRev int64) (*models.SyncStatusResponse, error) {
+	if cached, ok := s.getHeadCache(userID); ok {
+		serverReset := sinceRev > 0 && cached.latestRevision < sinceRev
+		if serverReset {
+			return &models.SyncStatusResponse{
+				LatestRevision: cached.latestRevision,
+				HasChanges:     true,
+				ServerReset:    true,
+			}, nil
+		}
+		if cached.latestRevision <= sinceRev {
+			return &models.SyncStatusResponse{
+				LatestRevision: cached.latestRevision,
+				HasChanges:     false,
+				ServerReset:    false,
+			}, nil
+		}
+		if clientID == "" || cached.lastClientID != clientID {
+			return &models.SyncStatusResponse{
+				LatestRevision: cached.latestRevision,
+				HasChanges:     true,
+				ServerReset:    false,
+			}, nil
+		}
+	}
+
+	var latestRev int64
+	var lastClientID string
+	err := s.db.Pool.QueryRow(ctx, `
+		SELECT revision, client_id
+		FROM sync_changelog
+		WHERE user_id = $1
+		ORDER BY revision DESC
+		LIMIT 1
+	`, userID).Scan(&latestRev, &lastClientID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			latestRev = 0
+			lastClientID = ""
+		} else {
+			return nil, fmt.Errorf("failed to query sync head: %w", err)
+		}
+	}
+
+	s.setHeadCache(userID, latestRev, lastClientID)
+
+	serverReset := sinceRev > 0 && latestRev < sinceRev
+	hasChanges := false
+	if serverReset {
+		hasChanges = true
+	} else if latestRev > sinceRev {
+		if clientID == "" || lastClientID != clientID {
+			hasChanges = true
+		} else {
+			// Latest revision came from this same client; verify in O(1) whether another device wrote between sinceRev and latestRev
+			var remoteExists bool
+			existsErr := s.db.Pool.QueryRow(ctx, `
+				SELECT EXISTS(
+					SELECT 1
+					FROM sync_changelog
+					WHERE user_id = $1 AND revision > $2 AND client_id <> $3
+				)
+			`, userID, sinceRev, clientID).Scan(&remoteExists)
+			if existsErr != nil {
+				return nil, fmt.Errorf("failed to check remote changes: %w", existsErr)
+			}
+			hasChanges = remoteExists
+		}
+	}
+
+	return &models.SyncStatusResponse{
+		LatestRevision: latestRev,
+		HasChanges:     hasChanges,
+		ServerReset:    serverReset,
+	}, nil
 }
 
 // getOrFallbackAccount returns accountID if valid, or falls back to user's first account, or creates a default one
@@ -1507,7 +1626,11 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 		}
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.invalidateHeadCache(userID)
+	return nil
 }
 
 // CreateTransaction creates a financial transaction directly via REST API and records in sync_changelog
@@ -1588,6 +1711,7 @@ func (s *SyncService) CreateTransaction(ctx context.Context, userID uuid.UUID, t
 	if err := conn.Commit(ctx); err != nil {
 		return nil, err
 	}
+	s.invalidateHeadCache(userID)
 
 	return &tx, nil
 }
@@ -1622,7 +1746,11 @@ func (s *SyncService) DeleteTransaction(ctx context.Context, userID uuid.UUID, t
 		return fmt.Errorf("failed to insert changelog: %w", err)
 	}
 
-	return conn.Commit(ctx)
+	if err := conn.Commit(ctx); err != nil {
+		return err
+	}
+	s.invalidateHeadCache(userID)
+	return nil
 }
 
 // ListTransactions returns all active transactions for the user

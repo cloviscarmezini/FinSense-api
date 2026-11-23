@@ -71,6 +71,7 @@ func SetupRouter(deps *RouterDependencies) http.Handler {
 			// Two-Way Sync
 			protected.Post("/sync/push-pull", syncHandler.PushPull)
 			protected.Get("/sync/delta", syncHandler.Delta)
+			protected.Get("/sync/status", syncHandler.Status)
 			protected.Post("/sync/reset", syncHandler.Reset)
 
 			// Transactions & Financial Entities (Direct API Access)

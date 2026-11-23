@@ -59,3 +59,9 @@ type SyncChangelog struct {
 	MutationID uuid.UUID     `json:"mutation_id"`
 	CreatedAt  time.Time     `json:"created_at"`
 }
+
+type SyncStatusResponse struct {
+	LatestRevision int64 `json:"latest_revision"`
+	HasChanges     bool  `json:"has_changes"`
+	ServerReset    bool  `json:"server_reset"`
+}

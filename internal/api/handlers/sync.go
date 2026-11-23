@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -73,6 +74,38 @@ func (h *SyncHandler) Delta(w http.ResponseWriter, r *http.Request) {
 		"latest_revision": latestRev,
 		"server_changes":  changes,
 	})
+}
+
+func (h *SyncHandler) Status(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		utils.RespondWithError(w, http.StatusUnauthorized, utils.ErrAuthUnauthorized, "Usuário não autenticado.", nil)
+		return
+	}
+
+	var sinceRev int64
+	if sinceRevStr := r.URL.Query().Get("since_revision"); sinceRevStr != "" {
+		if val, err := strconv.ParseInt(sinceRevStr, 10, 64); err == nil && val >= 0 {
+			sinceRev = val
+		}
+	}
+	clientID := r.URL.Query().Get("client_id")
+
+	res, err := h.syncService.CheckSyncStatus(r.Context(), userID, clientID, sinceRev)
+	if err != nil {
+		utils.RespondWithError(w, http.StatusInternalServerError, utils.ErrInternalServer, "Falha ao verificar status de sincronização: "+err.Error(), nil)
+		return
+	}
+
+	etag := fmt.Sprintf("W/\"sync-%d-%t-%t\"", res.LatestRevision, res.HasChanges, res.ServerReset)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	utils.RespondWithJSON(w, http.StatusOK, res)
 }
 
 type ResetDataRequest struct {
