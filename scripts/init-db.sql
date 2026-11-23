@@ -399,6 +399,111 @@ CREATE TABLE IF NOT EXISTS user_device_sessions (
     ip_address VARCHAR(50),
     last_access_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 13. Sinking Funds (Caixinhas de Provisão Anuais)
+CREATE TABLE IF NOT EXISTS sinking_funds (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(150) NOT NULL,
+    category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+    icon_symbol VARCHAR(100) NOT NULL DEFAULT 'tray.and.arrow.down.fill',
+    color_hex VARCHAR(9) NOT NULL DEFAULT '#0EA5E9',
+    target_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    recurrence_months INT NOT NULL DEFAULT 12,
+    due_month INT NOT NULL DEFAULT 1,
+    due_year INT NOT NULL DEFAULT 2027,
+    accumulated_reserve NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_sinking_funds_user ON sinking_funds(user_id) WHERE deleted_at IS NULL;
+
+-- 14. Cenários What-If ("E se?")
+CREATE TABLE IF NOT EXISTS what_if_scenarios (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(150) NOT NULL,
+    variable_income_reduction_percent NUMERIC(6, 2) NOT NULL DEFAULT 0.00,
+    unexpected_expense_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    unexpected_expense_month_offset INT NOT NULL DEFAULT 0,
+    benchmark_annual_rate_percent NUMERIC(6, 2) NOT NULL DEFAULT 11.25,
+    net_yield_tax_rate_percent NUMERIC(6, 2) NOT NULL DEFAULT 15.00,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+
+-- 15. Central de Insights, Fechamentos Mensais e Perfil ML Comportamental
+CREATE TABLE IF NOT EXISTS financial_insights (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    fingerprint VARCHAR(200) NOT NULL,
+    kind VARCHAR(60) NOT NULL,
+    severity VARCHAR(20) NOT NULL DEFAULT 'warning',
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    recommendation TEXT NOT NULL DEFAULT '',
+    impact_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    confidence_score NUMERIC(5, 4) NOT NULL DEFAULT 0.8000,
+    year_month_key INT NOT NULL DEFAULT 202601,
+    related_category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+    related_transaction_id UUID,
+    feedback VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_financial_insights_user ON financial_insights(user_id) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS monthly_reviews (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    year INT NOT NULL,
+    month INT NOT NULL,
+    planned_income NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    realized_income NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    planned_expense NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    realized_expense NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    planned_end_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    realized_end_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    previous_month_end_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    pending_amortizations_count INT NOT NULL DEFAULT 0,
+    pending_amortizations_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    deviation_highlights JSONB,
+    is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+    completed_at TIMESTAMPTZ,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS ml_behavioral_profiles (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    last_trained_at TIMESTAMPTZ,
+    training_epoch_count INT NOT NULL DEFAULT 0,
+    analyzed_transactions_count INT NOT NULL DEFAULT 0,
+    inflation_sensitivity NUMERIC(6, 4) NOT NULL DEFAULT 1.0000,
+    anomaly_z_threshold NUMERIC(6, 4) NOT NULL DEFAULT 2.2000,
+    subscription_drift_threshold_percent NUMERIC(6, 4) NOT NULL DEFAULT 3.0000,
+    category_weight_adjustments JSONB,
+    day_of_month_spend_curve JSONB,
+    category_stats JSONB,
+    useful_feedback_count INT NOT NULL DEFAULT 0,
+    ignored_feedback_count INT NOT NULL DEFAULT 0,
+    dismissed_feedback_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(user_id, device_id)
 );

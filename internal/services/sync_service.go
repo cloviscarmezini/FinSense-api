@@ -124,7 +124,7 @@ func entityPriority(entityName string, op models.OperationType) int {
 			return 2
 		case "credit_card_invoices", "credit_contracts", "investment_items", "debt_items":
 			return 3
-		case "category_provisions", "category_quota_rules", "amortization_plans":
+		case "category_provisions", "category_quota_rules", "amortization_plans", "sinking_funds", "what_if_scenarios", "financial_insights", "monthly_reviews", "ml_behavioral_profiles":
 			return 4
 		case "financial_transactions":
 			return 5
@@ -344,6 +344,16 @@ func initEmptyDeltas() map[string]interface{} {
 		"categoryProvisions":     []interface{}{},
 		"category_quota_rules":   []interface{}{},
 		"categoryQuotaRules":     []interface{}{},
+		"sinking_funds":          []interface{}{},
+		"sinkingFunds":           []interface{}{},
+		"what_if_scenarios":      []interface{}{},
+		"whatIfScenarios":        []interface{}{},
+		"financial_insights":     []interface{}{},
+		"financialInsights":      []interface{}{},
+		"monthly_reviews":        []interface{}{},
+		"monthlyReviews":         []interface{}{},
+		"ml_behavioral_profiles": []interface{}{},
+		"mlBehavioralProfiles":   []interface{}{},
 	}
 }
 
@@ -381,6 +391,21 @@ func appendToDeltas(deltas map[string]interface{}, entityName string, data map[s
 	case "category_quota_rules":
 		deltas["category_quota_rules"] = append(deltas["category_quota_rules"].([]interface{}), data)
 		deltas["categoryQuotaRules"] = append(deltas["categoryQuotaRules"].([]interface{}), data)
+	case "sinking_funds":
+		deltas["sinking_funds"] = append(deltas["sinking_funds"].([]interface{}), data)
+		deltas["sinkingFunds"] = append(deltas["sinkingFunds"].([]interface{}), data)
+	case "what_if_scenarios":
+		deltas["what_if_scenarios"] = append(deltas["what_if_scenarios"].([]interface{}), data)
+		deltas["whatIfScenarios"] = append(deltas["whatIfScenarios"].([]interface{}), data)
+	case "financial_insights":
+		deltas["financial_insights"] = append(deltas["financial_insights"].([]interface{}), data)
+		deltas["financialInsights"] = append(deltas["financialInsights"].([]interface{}), data)
+	case "monthly_reviews":
+		deltas["monthly_reviews"] = append(deltas["monthly_reviews"].([]interface{}), data)
+		deltas["monthlyReviews"] = append(deltas["monthlyReviews"].([]interface{}), data)
+	case "ml_behavioral_profiles":
+		deltas["ml_behavioral_profiles"] = append(deltas["ml_behavioral_profiles"].([]interface{}), data)
+		deltas["mlBehavioralProfiles"] = append(deltas["mlBehavioralProfiles"].([]interface{}), data)
 	}
 }
 
@@ -404,6 +429,11 @@ func (s *SyncService) GetAllActiveEntities(ctx context.Context, userID uuid.UUID
 		"amortization_plans",
 		"category_provisions",
 		"category_quota_rules",
+		"sinking_funds",
+		"what_if_scenarios",
+		"financial_insights",
+		"monthly_reviews",
+		"ml_behavioral_profiles",
 	}
 
 	var changes []models.Mutation
@@ -705,6 +735,11 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		"amortization_plans":     true,
 		"category_provisions":    true,
 		"category_quota_rules":   true,
+		"sinking_funds":          true,
+		"what_if_scenarios":      true,
+		"financial_insights":     true,
+		"monthly_reviews":        true,
+		"ml_behavioral_profiles": true,
 	}
 	if !validTables[m.EntityName] {
 		return false, nil
@@ -1516,6 +1551,262 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		}
 		return tag.RowsAffected() > 0, nil
 
+	case "sinking_funds":
+		var item models.SinkingFund
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.RecurrenceMonths < 1 {
+			item.RecurrenceMonths = 12
+		}
+		if item.DueMonth < 1 || item.DueMonth > 12 {
+			item.DueMonth = 1
+		}
+		if item.DueYear < 2020 {
+			item.DueYear = 2027
+		}
+		if item.CategoryID != nil && *item.CategoryID != uuid.Nil {
+			catID, err := s.getOrFallbackCategory(ctx, tx, userID, *item.CategoryID, "expense")
+			if err == nil {
+				item.CategoryID = &catID
+			} else {
+				item.CategoryID = nil
+			}
+		} else {
+			item.CategoryID = nil
+		}
+		query := `
+			INSERT INTO sinking_funds (
+				id, user_id, name, category_id, icon_symbol, color_hex,
+				target_amount, recurrence_months, due_month, due_year, accumulated_reserve,
+				is_enabled, notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				category_id = EXCLUDED.category_id,
+				icon_symbol = EXCLUDED.icon_symbol,
+				color_hex = EXCLUDED.color_hex,
+				target_amount = EXCLUDED.target_amount,
+				recurrence_months = EXCLUDED.recurrence_months,
+				due_month = EXCLUDED.due_month,
+				due_year = EXCLUDED.due_year,
+				accumulated_reserve = EXCLUDED.accumulated_reserve,
+				is_enabled = EXCLUDED.is_enabled,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE sinking_funds.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.CategoryID, item.IconSymbol, item.ColorHex,
+			item.TargetAmount, item.RecurrenceMonths, item.DueMonth, item.DueYear, item.AccumulatedReserve,
+			item.IsEnabled, item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "what_if_scenarios":
+		var item models.WhatIfScenario
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		query := `
+			INSERT INTO what_if_scenarios (
+				id, user_id, name, variable_income_reduction_percent, unexpected_expense_amount,
+				unexpected_expense_month_offset, benchmark_annual_rate_percent, net_yield_tax_rate_percent,
+				notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				variable_income_reduction_percent = EXCLUDED.variable_income_reduction_percent,
+				unexpected_expense_amount = EXCLUDED.unexpected_expense_amount,
+				unexpected_expense_month_offset = EXCLUDED.unexpected_expense_month_offset,
+				benchmark_annual_rate_percent = EXCLUDED.benchmark_annual_rate_percent,
+				net_yield_tax_rate_percent = EXCLUDED.net_yield_tax_rate_percent,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE what_if_scenarios.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.VariableIncomeReductionPercent, item.UnexpectedExpenseAmount,
+			item.UnexpectedExpenseMonthOffset, item.BenchmarkAnnualRatePercent, item.NetYieldTaxRatePercent,
+			item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "financial_insights":
+		var item models.FinancialInsight
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.RelatedCategoryID != nil && *item.RelatedCategoryID != uuid.Nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1 AND user_id = $2)", *item.RelatedCategoryID, userID).Scan(&exists)
+			if !exists {
+				item.RelatedCategoryID = nil
+			}
+		} else {
+			item.RelatedCategoryID = nil
+		}
+		query := `
+			INSERT INTO financial_insights (
+				id, user_id, fingerprint, kind, severity, title, message, recommendation,
+				impact_amount, confidence_score, year_month_key, related_category_id, related_transaction_id,
+				feedback, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			ON CONFLICT (id) DO UPDATE SET
+				fingerprint = EXCLUDED.fingerprint,
+				kind = EXCLUDED.kind,
+				severity = EXCLUDED.severity,
+				title = EXCLUDED.title,
+				message = EXCLUDED.message,
+				recommendation = EXCLUDED.recommendation,
+				impact_amount = EXCLUDED.impact_amount,
+				confidence_score = EXCLUDED.confidence_score,
+				year_month_key = EXCLUDED.year_month_key,
+				related_category_id = EXCLUDED.related_category_id,
+				related_transaction_id = EXCLUDED.related_transaction_id,
+				feedback = EXCLUDED.feedback,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE financial_insights.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Fingerprint, item.Kind, item.Severity, item.Title, item.Message, item.Recommendation,
+			item.ImpactAmount, item.ConfidenceScore, item.YearMonthKey, item.RelatedCategoryID, item.RelatedTransactionID,
+			item.Feedback, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "monthly_reviews":
+		var item models.MonthlyReview
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		query := `
+			INSERT INTO monthly_reviews (
+				id, user_id, year, month, planned_income, realized_income, planned_expense, realized_expense,
+				planned_end_balance, realized_end_balance, previous_month_end_balance,
+				pending_amortizations_count, pending_amortizations_amount, deviation_highlights,
+				is_completed, completed_at, notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			ON CONFLICT (id) DO UPDATE SET
+				year = EXCLUDED.year,
+				month = EXCLUDED.month,
+				planned_income = EXCLUDED.planned_income,
+				realized_income = EXCLUDED.realized_income,
+				planned_expense = EXCLUDED.planned_expense,
+				realized_expense = EXCLUDED.realized_expense,
+				planned_end_balance = EXCLUDED.planned_end_balance,
+				realized_end_balance = EXCLUDED.realized_end_balance,
+				previous_month_end_balance = EXCLUDED.previous_month_end_balance,
+				pending_amortizations_count = EXCLUDED.pending_amortizations_count,
+				pending_amortizations_amount = EXCLUDED.pending_amortizations_amount,
+				deviation_highlights = EXCLUDED.deviation_highlights,
+				is_completed = EXCLUDED.is_completed,
+				completed_at = EXCLUDED.completed_at,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE monthly_reviews.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Year, item.Month, item.PlannedIncome, item.RealizedIncome, item.PlannedExpense, item.RealizedExpense,
+			item.PlannedEndBalance, item.RealizedEndBalance, item.PreviousMonthEndBalance,
+			item.PendingAmortizationsCount, item.PendingAmortizationsAmount, item.DeviationHighlights,
+			item.IsCompleted, item.CompletedAt, item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "ml_behavioral_profiles":
+		var item models.MLBehavioralProfile
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		query := `
+			INSERT INTO ml_behavioral_profiles (
+				id, user_id, last_trained_at, training_epoch_count, analyzed_transactions_count,
+				inflation_sensitivity, anomaly_z_threshold, subscription_drift_threshold_percent,
+				category_weight_adjustments, day_of_month_spend_curve, category_stats,
+				useful_feedback_count, ignored_feedback_count, dismissed_feedback_count,
+				created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			ON CONFLICT (id) DO UPDATE SET
+				last_trained_at = EXCLUDED.last_trained_at,
+				training_epoch_count = EXCLUDED.training_epoch_count,
+				analyzed_transactions_count = EXCLUDED.analyzed_transactions_count,
+				inflation_sensitivity = EXCLUDED.inflation_sensitivity,
+				anomaly_z_threshold = EXCLUDED.anomaly_z_threshold,
+				subscription_drift_threshold_percent = EXCLUDED.subscription_drift_threshold_percent,
+				category_weight_adjustments = EXCLUDED.category_weight_adjustments,
+				day_of_month_spend_curve = EXCLUDED.day_of_month_spend_curve,
+				category_stats = EXCLUDED.category_stats,
+				useful_feedback_count = EXCLUDED.useful_feedback_count,
+				ignored_feedback_count = EXCLUDED.ignored_feedback_count,
+				dismissed_feedback_count = EXCLUDED.dismissed_feedback_count,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE ml_behavioral_profiles.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.LastTrainedAt, item.TrainingEpochCount, item.AnalyzedTransactionsCount,
+			item.InflationSensitivity, item.AnomalyZThreshold, item.SubscriptionDriftThresholdPercent,
+			item.CategoryWeightAdjustments, item.DayOfMonthSpendCurve, item.CategoryStats,
+			item.UsefulFeedbackCount, item.IgnoredFeedbackCount, item.DismissedFeedbackCount,
+			createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
 	default:
 		return false, nil
 	}
@@ -1567,6 +1858,11 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 			"investment_items",
 			"category_quota_rules",
 			"category_provisions",
+			"sinking_funds",
+			"what_if_scenarios",
+			"financial_insights",
+			"monthly_reviews",
+			"ml_behavioral_profiles",
 			"categories",
 			"bank_accounts",
 			"asset_files",
@@ -1607,6 +1903,15 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 		}
 		if targetSet["aimodelsandchat"] || targetSet["chat"] || targetSet["chat_messages"] {
 			tablesToDelete = append(tablesToDelete, "chat_messages")
+		}
+		if targetSet["sinkingfunds"] || targetSet["sinking_funds"] {
+			tablesToDelete = append(tablesToDelete, "sinking_funds")
+		}
+		if targetSet["whatifscenarios"] || targetSet["what_if_scenarios"] {
+			tablesToDelete = append(tablesToDelete, "what_if_scenarios")
+		}
+		if targetSet["insights"] || targetSet["financial_insights"] {
+			tablesToDelete = append(tablesToDelete, "financial_insights", "monthly_reviews", "ml_behavioral_profiles")
 		}
 	}
 

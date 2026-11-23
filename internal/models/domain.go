@@ -315,3 +315,105 @@ type ChatMessage struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
+
+// SinkingFund represents an annual or seasonal proportional provision
+type SinkingFund struct {
+	ID                 uuid.UUID  `json:"id"`
+	UserID             uuid.UUID  `json:"user_id"`
+	Name               string     `json:"name"`
+	CategoryID         *uuid.UUID `json:"category_id,omitempty"`
+	IconSymbol         string     `json:"icon_symbol"`
+	ColorHex           string     `json:"color_hex"`
+	TargetAmount       float64    `json:"target_amount"`
+	RecurrenceMonths   int        `json:"recurrence_months"`
+	DueMonth           int        `json:"due_month"`
+	DueYear            int        `json:"due_year"`
+	AccumulatedReserve float64    `json:"accumulated_reserve"`
+	IsEnabled          bool       `json:"is_enabled"`
+	Notes              string     `json:"notes"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
+}
+
+// WhatIfScenario represents a saved cash stress test / decision scenario
+type WhatIfScenario struct {
+	ID                             uuid.UUID  `json:"id"`
+	UserID                         uuid.UUID  `json:"user_id"`
+	Name                           string     `json:"name"`
+	VariableIncomeReductionPercent float64    `json:"variable_income_reduction_percent"`
+	UnexpectedExpenseAmount        float64    `json:"unexpected_expense_amount"`
+	UnexpectedExpenseMonthOffset   int        `json:"unexpected_expense_month_offset"`
+	BenchmarkAnnualRatePercent     float64    `json:"benchmark_annual_rate_percent"`
+	NetYieldTaxRatePercent         float64    `json:"net_yield_tax_rate_percent"`
+	Notes                          string     `json:"notes"`
+	CreatedAt                      time.Time  `json:"created_at"`
+	UpdatedAt                      time.Time  `json:"updated_at"`
+	DeletedAt                      *time.Time `json:"deleted_at,omitempty"`
+}
+
+// FinancialInsight represents a proactive ML behavioral insight
+type FinancialInsight struct {
+	ID                   uuid.UUID  `json:"id"`
+	UserID               uuid.UUID  `json:"user_id"`
+	Fingerprint          string     `json:"fingerprint"`
+	Kind                 string     `json:"kind"`
+	Severity             string     `json:"severity"`
+	Title                string     `json:"title"`
+	Message              string     `json:"message"`
+	Recommendation       string     `json:"recommendation"`
+	ImpactAmount         float64    `json:"impact_amount"`
+	ConfidenceScore      float64    `json:"confidence_score"`
+	YearMonthKey         int        `json:"year_month_key"`
+	RelatedCategoryID    *uuid.UUID `json:"related_category_id,omitempty"`
+	RelatedTransactionID *uuid.UUID `json:"related_transaction_id,omitempty"`
+	Feedback             string     `json:"feedback"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
+}
+
+// MonthlyReview represents a guided monthly closing record
+type MonthlyReview struct {
+	ID                         uuid.UUID   `json:"id"`
+	UserID                     uuid.UUID   `json:"user_id"`
+	Year                       int         `json:"year"`
+	Month                      int         `json:"month"`
+	PlannedIncome              float64     `json:"planned_income"`
+	RealizedIncome             float64     `json:"realized_income"`
+	PlannedExpense             float64     `json:"planned_expense"`
+	RealizedExpense            float64     `json:"realized_expense"`
+	PlannedEndBalance          float64     `json:"planned_end_balance"`
+	RealizedEndBalance         float64     `json:"realized_end_balance"`
+	PreviousMonthEndBalance    float64     `json:"previous_month_end_balance"`
+	PendingAmortizationsCount  int         `json:"pending_amortizations_count"`
+	PendingAmortizationsAmount float64     `json:"pending_amortizations_amount"`
+	DeviationHighlights        interface{} `json:"deviation_highlights,omitempty"`
+	IsCompleted                bool        `json:"is_completed"`
+	CompletedAt                *time.Time  `json:"completed_at,omitempty"`
+	Notes                      string      `json:"notes"`
+	CreatedAt                  time.Time   `json:"created_at"`
+	UpdatedAt                  time.Time   `json:"updated_at"`
+	DeletedAt                  *time.Time  `json:"deleted_at,omitempty"`
+}
+
+// MLBehavioralProfile stores learned continuous ML weights and baselines
+type MLBehavioralProfile struct {
+	ID                               uuid.UUID   `json:"id"`
+	UserID                           uuid.UUID   `json:"user_id"`
+	LastTrainedAt                    *time.Time  `json:"last_trained_at,omitempty"`
+	TrainingEpochCount               int         `json:"training_epoch_count"`
+	AnalyzedTransactionsCount        int         `json:"analyzed_transactions_count"`
+	InflationSensitivity             float64     `json:"inflation_sensitivity"`
+	AnomalyZThreshold                float64     `json:"anomaly_z_threshold"`
+	SubscriptionDriftThresholdPercent float64    `json:"subscription_drift_threshold_percent"`
+	CategoryWeightAdjustments        interface{} `json:"category_weight_adjustments,omitempty"`
+	DayOfMonthSpendCurve             interface{} `json:"day_of_month_spend_curve,omitempty"`
+	CategoryStats                    interface{} `json:"category_stats,omitempty"`
+	UsefulFeedbackCount              int         `json:"useful_feedback_count"`
+	IgnoredFeedbackCount             int         `json:"ignored_feedback_count"`
+	DismissedFeedbackCount           int         `json:"dismissed_feedback_count"`
+	CreatedAt                        time.Time   `json:"created_at"`
+	UpdatedAt                        time.Time   `json:"updated_at"`
+	DeletedAt                        *time.Time  `json:"deleted_at,omitempty"`
+}
