@@ -27,7 +27,8 @@ func (h *BackupHandler) ExportFull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tables := []string{
-		"bank_accounts", "categories", "financial_transactions",
+		"bank_accounts", "credit_cards", "credit_card_invoices",
+		"categories", "financial_transactions",
 		"investment_items", "investment_movements", "credit_contracts",
 		"amortization_records", "debt_items", "category_provisions",
 		"category_quota_rules",

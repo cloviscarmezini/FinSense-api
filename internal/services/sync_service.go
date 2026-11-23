@@ -69,9 +69,9 @@ func entityPriority(entityName string, op models.OperationType) int {
 		switch entityName {
 		case "financial_transactions", "amortization_plans":
 			return 1
-		case "category_quota_rules", "category_provisions", "credit_contracts", "investment_items", "debt_items":
+		case "credit_card_invoices", "category_quota_rules", "category_provisions", "credit_contracts", "investment_items", "debt_items":
 			return 2
-		case "categories":
+		case "credit_cards", "categories":
 			return 3
 		case "bank_accounts":
 			return 4
@@ -82,9 +82,9 @@ func entityPriority(entityName string, op models.OperationType) int {
 		switch entityName {
 		case "bank_accounts":
 			return 1
-		case "categories":
+		case "credit_cards", "categories":
 			return 2
-		case "credit_contracts", "investment_items", "debt_items":
+		case "credit_card_invoices", "credit_contracts", "investment_items", "debt_items":
 			return 3
 		case "category_provisions", "category_quota_rules", "amortization_plans":
 			return 4
@@ -284,6 +284,10 @@ func initEmptyDeltas() map[string]interface{} {
 	return map[string]interface{}{
 		"bank_accounts":          []interface{}{},
 		"bankAccounts":           []interface{}{},
+		"credit_cards":           []interface{}{},
+		"creditCards":            []interface{}{},
+		"credit_card_invoices":   []interface{}{},
+		"creditCardInvoices":     []interface{}{},
 		"categories":             []interface{}{},
 		"financial_transactions": []interface{}{},
 		"financialTransactions":  []interface{}{},
@@ -307,6 +311,12 @@ func appendToDeltas(deltas map[string]interface{}, entityName string, data map[s
 	case "bank_accounts":
 		deltas["bank_accounts"] = append(deltas["bank_accounts"].([]interface{}), data)
 		deltas["bankAccounts"] = append(deltas["bankAccounts"].([]interface{}), data)
+	case "credit_cards":
+		deltas["credit_cards"] = append(deltas["credit_cards"].([]interface{}), data)
+		deltas["creditCards"] = append(deltas["creditCards"].([]interface{}), data)
+	case "credit_card_invoices":
+		deltas["credit_card_invoices"] = append(deltas["credit_card_invoices"].([]interface{}), data)
+		deltas["creditCardInvoices"] = append(deltas["creditCardInvoices"].([]interface{}), data)
 	case "categories":
 		deltas["categories"] = append(deltas["categories"].([]interface{}), data)
 	case "financial_transactions":
@@ -343,6 +353,8 @@ func (s *SyncService) GetAllActiveEntities(ctx context.Context, userID uuid.UUID
 
 	tables := []string{
 		"bank_accounts",
+		"credit_cards",
+		"credit_card_invoices",
 		"categories",
 		"financial_transactions",
 		"investment_items",
@@ -564,6 +576,8 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 
 	validTables := map[string]bool{
 		"bank_accounts":          true,
+		"credit_cards":           true,
+		"credit_card_invoices":   true,
 		"categories":             true,
 		"financial_transactions": true,
 		"debt_items":             true,
@@ -627,6 +641,142 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		}
 		return tag.RowsAffected() > 0, nil
 
+	case "credit_cards":
+		var item models.CreditCard
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.ClosingDay < 1 || item.ClosingDay > 31 {
+			item.ClosingDay = 25
+		}
+		if item.BestPurchaseDay < 1 || item.BestPurchaseDay > 31 {
+			if item.ClosingDay >= 31 {
+				item.BestPurchaseDay = 1
+			} else {
+				item.BestPurchaseDay = item.ClosingDay + 1
+			}
+		}
+		if item.DueDay < 1 || item.DueDay > 31 {
+			item.DueDay = 5
+		}
+		if item.Brand == "" {
+			item.Brand = "Mastercard"
+		}
+		if item.IconSymbol == "" {
+			item.IconSymbol = "creditcard.fill"
+		}
+		if item.ColorHex == "" {
+			item.ColorHex = "#820AD1"
+		}
+		if item.DefaultPaymentAccountID != nil && *item.DefaultPaymentAccountID != uuid.Nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2)", *item.DefaultPaymentAccountID, userID).Scan(&exists)
+			if !exists {
+				item.DefaultPaymentAccountID = nil
+			}
+		} else {
+			item.DefaultPaymentAccountID = nil
+		}
+
+		query := `
+			INSERT INTO credit_cards (
+				id, user_id, name, total_limit, closing_day, best_purchase_day, due_day,
+				default_payment_account_id, brand, bank_preset_id, custom_image_path,
+				icon_symbol, color_hex, last_four_digits, display_order, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				total_limit = EXCLUDED.total_limit,
+				closing_day = EXCLUDED.closing_day,
+				best_purchase_day = EXCLUDED.best_purchase_day,
+				due_day = EXCLUDED.due_day,
+				default_payment_account_id = EXCLUDED.default_payment_account_id,
+				brand = EXCLUDED.brand,
+				bank_preset_id = EXCLUDED.bank_preset_id,
+				custom_image_path = EXCLUDED.custom_image_path,
+				icon_symbol = EXCLUDED.icon_symbol,
+				color_hex = EXCLUDED.color_hex,
+				last_four_digits = EXCLUDED.last_four_digits,
+				display_order = EXCLUDED.display_order,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE credit_cards.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.TotalLimit, item.ClosingDay, item.BestPurchaseDay, item.DueDay,
+			item.DefaultPaymentAccountID, item.Brand, item.BankPresetID, item.CustomImagePath,
+			item.IconSymbol, item.ColorHex, item.LastFourDigits, item.DisplayOrder, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "credit_card_invoices":
+		var item models.CreditCardInvoice
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		var cardExists bool
+		_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM credit_cards WHERE id = $1 AND user_id = $2)", item.CreditCardID, userID).Scan(&cardExists)
+		if !cardExists {
+			return false, fmt.Errorf("credit_card_id %s not found for invoice", item.CreditCardID)
+		}
+		if item.PaidFromAccountID != nil && *item.PaidFromAccountID != uuid.Nil {
+			var accExists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2)", *item.PaidFromAccountID, userID).Scan(&accExists)
+			if !accExists {
+				item.PaidFromAccountID = nil
+			}
+		} else {
+			item.PaidFromAccountID = nil
+		}
+
+		query := `
+			INSERT INTO credit_card_invoices (
+				id, user_id, credit_card_id, year, month, closing_date, due_date,
+				is_paid, paid_amount, paid_date, paid_from_account_id, payment_transaction_id,
+				created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			ON CONFLICT (id) DO UPDATE SET
+				credit_card_id = EXCLUDED.credit_card_id,
+				year = EXCLUDED.year,
+				month = EXCLUDED.month,
+				closing_date = EXCLUDED.closing_date,
+				due_date = EXCLUDED.due_date,
+				is_paid = EXCLUDED.is_paid,
+				paid_amount = EXCLUDED.paid_amount,
+				paid_date = EXCLUDED.paid_date,
+				paid_from_account_id = EXCLUDED.paid_from_account_id,
+				payment_transaction_id = EXCLUDED.payment_transaction_id,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE credit_card_invoices.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.CreditCardID, item.Year, item.Month, item.ClosingDate, item.DueDate,
+			item.IsPaid, item.PaidAmount, item.PaidDate, item.PaidFromAccountID, item.PaymentTransactionID,
+			createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
 	case "categories":
 		var item models.Category
 		if err := json.Unmarshal(jsonBytes, &item); err != nil {
@@ -678,11 +828,16 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.StatementOccurrenceIndex = 1
 		}
 
-		accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
-		if err != nil {
-			return false, fmt.Errorf("account validation failed: %w", err)
+		isCardPurchase := item.CreditCardID != nil && *item.CreditCardID != uuid.Nil && (item.TransactionOrigin == nil || *item.TransactionOrigin != "creditCardInvoicePayment")
+		if isCardPurchase {
+			item.AccountID = *item.CreditCardID
+		} else {
+			accID, err := s.getOrFallbackAccount(ctx, tx, userID, item.AccountID)
+			if err != nil {
+				return false, fmt.Errorf("account validation failed: %w", err)
+			}
+			item.AccountID = accID
 		}
-		item.AccountID = accID
 
 		catID, err := s.getOrFallbackCategory(ctx, tx, userID, item.CategoryID, item.Type)
 		if err != nil {
@@ -728,9 +883,10 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
 				transaction_origin, linked_entity_id,
 				base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
+				credit_card_id, credit_card_invoice_year_month_key, credit_card_invoice_id,
 				created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 			ON CONFLICT (id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				category_id = EXCLUDED.category_id,
@@ -762,6 +918,9 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				base_installment_registered_amount = EXCLUDED.base_installment_registered_amount,
 				projected_installment_correction_amount = EXCLUDED.projected_installment_correction_amount,
 				confirmed_real_interest_correction_amount = EXCLUDED.confirmed_real_interest_correction_amount,
+				credit_card_id = EXCLUDED.credit_card_id,
+				credit_card_invoice_year_month_key = EXCLUDED.credit_card_invoice_year_month_key,
+				credit_card_invoice_id = EXCLUDED.credit_card_invoice_id,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE financial_transactions.updated_at <= EXCLUDED.updated_at;
@@ -774,6 +933,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.LinkedDebtID, item.LinkedQuotaID, item.LinkedQuotaUnits, item.LinkedQuotaYearMonthKey,
 			item.TransactionOrigin, item.LinkedEntityID,
 			item.BaseInstallmentRegisteredAmount, item.ProjectedInstallmentCorrectionAmount, item.ConfirmedRealInterestCorrectionAmount,
+			item.CreditCardID, item.CreditCardInvoiceYearMonthKey, item.CreditCardInvoiceID,
 			createdAt, effectiveTime,
 		)
 		if err != nil {
@@ -1281,6 +1441,8 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 			"amortization_records",
 			"investment_movements",
 			"financial_transactions",
+			"credit_card_invoices",
+			"credit_cards",
 			"credit_contracts",
 			"debt_items",
 			"investment_items",
@@ -1317,6 +1479,9 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 		}
 		if targetSet["categories"] {
 			tablesToDelete = append(tablesToDelete, "category_quota_rules", "category_provisions", "categories")
+		}
+		if targetSet["creditcards"] || targetSet["credit_cards"] || targetSet["credit_card_invoices"] {
+			tablesToDelete = append(tablesToDelete, "credit_card_invoices", "credit_cards")
 		}
 		if targetSet["accounts"] || targetSet["bank_accounts"] {
 			tablesToDelete = append(tablesToDelete, "bank_accounts")
@@ -1391,9 +1556,10 @@ func (s *SyncService) CreateTransaction(ctx context.Context, userID uuid.UUID, t
 			linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
 			transaction_origin, linked_entity_id,
 			base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
+			credit_card_id, credit_card_invoice_year_month_key, credit_card_invoice_id,
 			created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 	`
 	_, err = conn.Exec(ctx, query,
 		tx.ID, tx.UserID, tx.AccountID, tx.CategoryID, tx.Name, tx.Details, tx.Amount, tx.Date, tx.Type, tx.IsPaid,
@@ -1403,6 +1569,7 @@ func (s *SyncService) CreateTransaction(ctx context.Context, userID uuid.UUID, t
 		tx.LinkedDebtID, tx.LinkedQuotaID, tx.LinkedQuotaUnits, tx.LinkedQuotaYearMonthKey,
 		tx.TransactionOrigin, tx.LinkedEntityID,
 		tx.BaseInstallmentRegisteredAmount, tx.ProjectedInstallmentCorrectionAmount, tx.ConfirmedRealInterestCorrectionAmount,
+		tx.CreditCardID, tx.CreditCardInvoiceYearMonthKey, tx.CreditCardInvoiceID,
 		tx.CreatedAt, tx.UpdatedAt,
 	)
 	if err != nil {
@@ -1468,6 +1635,7 @@ func (s *SyncService) ListTransactions(ctx context.Context, userID uuid.UUID) ([
 			linked_debt_id, linked_quota_id, linked_quota_units, linked_quota_year_month_key,
 			transaction_origin, linked_entity_id,
 			base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
+			credit_card_id, credit_card_invoice_year_month_key, credit_card_invoice_id,
 			created_at, updated_at
 		FROM financial_transactions
 		WHERE user_id = $1 AND deleted_at IS NULL
@@ -1490,6 +1658,7 @@ func (s *SyncService) ListTransactions(ctx context.Context, userID uuid.UUID) ([
 			&tx.LinkedDebtID, &tx.LinkedQuotaID, &tx.LinkedQuotaUnits, &tx.LinkedQuotaYearMonthKey,
 			&tx.TransactionOrigin, &tx.LinkedEntityID,
 			&tx.BaseInstallmentRegisteredAmount, &tx.ProjectedInstallmentCorrectionAmount, &tx.ConfirmedRealInterestCorrectionAmount,
+			&tx.CreditCardID, &tx.CreditCardInvoiceYearMonthKey, &tx.CreditCardInvoiceID,
 			&tx.CreatedAt, &tx.UpdatedAt,
 		)
 		if err != nil {

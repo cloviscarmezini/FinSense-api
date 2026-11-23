@@ -74,9 +74,53 @@ type FinancialTransaction struct {
 	BaseInstallmentRegisteredAmount       *float64   `json:"base_installment_registered_amount,omitempty"`
 	ProjectedInstallmentCorrectionAmount  *float64   `json:"projected_installment_correction_amount,omitempty"`
 	ConfirmedRealInterestCorrectionAmount *float64   `json:"confirmed_real_interest_correction_amount,omitempty"`
+	CreditCardID                          *uuid.UUID `json:"credit_card_id,omitempty"`
+	CreditCardInvoiceYearMonthKey         *int       `json:"credit_card_invoice_year_month_key,omitempty"`
+	CreditCardInvoiceID                   *uuid.UUID `json:"credit_card_invoice_id,omitempty"`
 	CreatedAt                             time.Time  `json:"created_at"`
 	UpdatedAt                             time.Time  `json:"updated_at"`
 	DeletedAt                             *time.Time `json:"deleted_at,omitempty"`
+}
+
+// CreditCard represents a credit card entity synced with client devices
+type CreditCard struct {
+	ID                      uuid.UUID  `json:"id"`
+	UserID                  uuid.UUID  `json:"user_id"`
+	Name                    string     `json:"name"`
+	TotalLimit              float64    `json:"total_limit"`
+	ClosingDay              int        `json:"closing_day"`
+	BestPurchaseDay         int        `json:"best_purchase_day"`
+	DueDay                  int        `json:"due_day"`
+	DefaultPaymentAccountID *uuid.UUID `json:"default_payment_account_id,omitempty"`
+	Brand                   string     `json:"brand"`
+	BankPresetID            *string    `json:"bank_preset_id,omitempty"`
+	CustomImagePath         *string    `json:"custom_image_path,omitempty"`
+	IconSymbol              string     `json:"icon_symbol"`
+	ColorHex                string     `json:"color_hex"`
+	LastFourDigits          string     `json:"last_four_digits"`
+	DisplayOrder            int        `json:"display_order"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+	DeletedAt               *time.Time `json:"deleted_at,omitempty"`
+}
+
+// CreditCardInvoice represents a monthly billing cycle for a credit card
+type CreditCardInvoice struct {
+	ID                   uuid.UUID  `json:"id"`
+	UserID               uuid.UUID  `json:"user_id"`
+	CreditCardID         uuid.UUID  `json:"credit_card_id"`
+	Year                 int        `json:"year"`
+	Month                int        `json:"month"`
+	ClosingDate          time.Time  `json:"closing_date"`
+	DueDate              time.Time  `json:"due_date"`
+	IsPaid               bool       `json:"is_paid"`
+	PaidAmount           *float64   `json:"paid_amount,omitempty"`
+	PaidDate             *time.Time `json:"paid_date,omitempty"`
+	PaidFromAccountID    *uuid.UUID `json:"paid_from_account_id,omitempty"`
+	PaymentTransactionID *uuid.UUID `json:"payment_transaction_id,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
 }
 
 // InvestmentItem represents an asset portfolio position
