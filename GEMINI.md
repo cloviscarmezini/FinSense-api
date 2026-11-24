@@ -6,4 +6,5 @@ Consulte o manifesto e regras canônicas completas para agentes em:
 ### Diretrizes Obrigatórias:
 1. Todas as alterações, novas rotas ou tabelas devem atualizar o manifesto `AGENTS.md`.
 2. Toda alteração deve ser finalizada com um commit semântico (Conventional Commits).
-3. Preserve a integridade do motor de sincronização Two-Way (LWW, ordenação topológica e endpoint de status leve).
+3. **NUNCA execute `git push`** sob hipótese alguma.
+4. Preserve a integridade do motor de sincronização Two-Way (LWW, ordenação topológica e endpoint de status leve).

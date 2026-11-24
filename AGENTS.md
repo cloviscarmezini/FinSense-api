@@ -11,12 +11,14 @@
 
 1. **Revisão e Manutenção Contínua deste Manifesto:**  
    Sempre que implementar novas rotas, adicionar tabelas no banco de dados, alterar esquemas de mutação do motor de sync ou modificar regras de negócio, você **DEVE** revisar e atualizar este manifesto (`AGENTS.md`), mantendo-o rigorosamente alinhado à implementação.
-2. **Commits Semânticos Obrigatórios:**  
-   Toda alteração de código ou configuração deve ser acompanhada de commit semântico no padrão *Conventional Commits* (ex.: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`). **Nunca** faça commits genéricos e **nunca** suba alterações para repositórios remotos (`git push`) sem aprovação explícita.
+2. **Commits Semânticos Obrigatórios & Proibição de `git push`:**  
+   Toda alteração de código ou configuração deve ser acompanhada de commit semântico no padrão *Conventional Commits* (ex.: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`). **NUNCA execute `git push`** sob hipótese alguma para branches remotas; os commits devem permanecer estritamente no repositório local.
 3. **Validação de Compilação e Testes em Go:**  
    Antes de finalizar tarefas, execute `go vet ./...` e `go test ./...` para assegurar que não haja quebras de tipos, dependências quebradas ou falhas de regressão no motor de sincronização.
 4. **Isolamento e Compatibilidade Multi-Dispositivo (Desktop + iOS):**  
    O backend atende múltiplos clientes simultâneos (Desktop macOS e App iOS). Toda alteração nos esquemas de sincronização deve garantir compatibilidade retroativa e ordenação topológica de chaves estrangeiras.
+5. **Paridade com Novos Campos e Entidades dos Apps:**  
+   Sempre que novas features, entidades ou campos forem criados no Desktop ou iOS, a API **DEVE** obrigatoriamente atualizar seus modelos GORM, tabelas do banco, DTOs de sincronização e handlers de backup/sync.
 
 ---
 
