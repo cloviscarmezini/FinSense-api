@@ -67,6 +67,13 @@ Todas as entidades do ecossistema financeiro possuem persistência relacional no
 14. **`financial_insights` (`FinancialInsight`):** Alertas de ML comportamental com severidade (`critical`, `warning`, `info`) e feedback do usuário.
 15. **`monthly_reviews` (`MonthlyReview`):** Fechamento mensal guiado comparando planejado vs. realizado.
 16. **`ml_behavioral_profiles` (`MLBehavioralProfile`):** Pesos e parâmetros calibrados localmente pelo motor de machine learning.
+17. **`reconciliation_rules` (`ReconciliationRule`):** Regras determinísticas de conciliação e limpeza executadas no Desktop antes da IA.
+18. **`asset_items` (`AssetItem`):** Bens não-bancários (imóveis, veículos, FGTS, previdência) com histórico de avaliação e vínculo a financiamentos.
+19. **`income_sources` (`IncomeSource`):** Fontes estruturadas de renda (fixa, variável/sazonal, passiva) e moeda.
+20. **`net_worth_snapshots` (`NetWorthSnapshot`):** Snapshots históricos mensais consolidados de ativos, passivos e Net Worth em BRL.
+21. **`fire_scenarios` (`FIREScenario`):** Cenários salvos de independência financeira (FIRE).
+
+*(Nota de esquema: `bank_accounts`, `investment_items` e `sinking_funds` possuem `currency_code` default `'BRL'`; `financial_transactions` inclui `needs_review`, `source_app`, campos de reembolso e campos multimoeda `currency_code` / `exchange_rate_to_brl`.)*
 
 ### 2.2. Motor de Sincronização Two-Way (Delta Engine)
 - **Protocolo Baseado em Revisões Monótonas:**

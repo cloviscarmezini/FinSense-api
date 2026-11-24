@@ -19,6 +19,7 @@ type BankAccount struct {
 	Agency          string     `json:"agency"`
 	AccountNumber   string     `json:"account_number"`
 	DisplayOrder    int        `json:"display_order"`
+	CurrencyCode    string     `json:"currency_code"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
@@ -77,6 +78,17 @@ type FinancialTransaction struct {
 	CreditCardID                          *uuid.UUID `json:"credit_card_id,omitempty"`
 	CreditCardInvoiceYearMonthKey         *int       `json:"credit_card_invoice_year_month_key,omitempty"`
 	CreditCardInvoiceID                   *uuid.UUID `json:"credit_card_invoice_id,omitempty"`
+	NeedsReview                           bool       `json:"needs_review"`
+	SourceApp                             *string    `json:"source_app,omitempty"`
+	IsReimbursable                        bool       `json:"is_reimbursable"`
+	ReimbursableDebtor                    *string    `json:"reimbursable_debtor,omitempty"`
+	ReimbursableAmount                    *float64   `json:"reimbursable_amount,omitempty"`
+	ReimbursementExpectedDate             *time.Time `json:"reimbursement_expected_date,omitempty"`
+	ReimbursementReceivedAmount           *float64   `json:"reimbursement_received_amount,omitempty"`
+	IsReimbursementSettled                bool       `json:"is_reimbursement_settled"`
+	LinkedReimbursementTransactionID      *uuid.UUID `json:"linked_reimbursement_transaction_id,omitempty"`
+	CurrencyCode                          string     `json:"currency_code"`
+	ExchangeRateToBRL                     *float64   `json:"exchange_rate_to_brl,omitempty"`
 	CreatedAt                             time.Time  `json:"created_at"`
 	UpdatedAt                             time.Time  `json:"updated_at"`
 	DeletedAt                             *time.Time `json:"deleted_at,omitempty"`
@@ -135,6 +147,7 @@ type InvestmentItem struct {
 	IconSymbol           string     `json:"icon_symbol"`
 	ColorHex             string     `json:"color_hex"`
 	Notes                string      `json:"notes"`
+	CurrencyCode         string      `json:"currency_code"`
 	Movements            interface{} `json:"movements,omitempty"`
 	CreatedAt            time.Time   `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
@@ -331,6 +344,7 @@ type SinkingFund struct {
 	AccumulatedReserve float64    `json:"accumulated_reserve"`
 	IsEnabled          bool       `json:"is_enabled"`
 	Notes              string     `json:"notes"`
+	CurrencyCode       string     `json:"currency_code"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
@@ -416,4 +430,110 @@ type MLBehavioralProfile struct {
 	CreatedAt                        time.Time   `json:"created_at"`
 	UpdatedAt                        time.Time   `json:"updated_at"`
 	DeletedAt                        *time.Time  `json:"deleted_at,omitempty"`
+}
+
+// ReconciliationRule represents a deterministic rule to classify and enrich transactions
+type ReconciliationRule struct {
+	ID                       uuid.UUID  `json:"id"`
+	UserID                   uuid.UUID  `json:"user_id"`
+	Name                     string     `json:"name"`
+	Priority                 int        `json:"priority"`
+	IsEnabled                bool       `json:"is_enabled"`
+	MatchField               string     `json:"match_field"`
+	MatchOperator            string     `json:"match_operator"`
+	MatchPattern             string     `json:"match_pattern"`
+	MinAmount                *float64   `json:"min_amount,omitempty"`
+	MaxAmount                *float64   `json:"max_amount,omitempty"`
+	SourceAccountID          *uuid.UUID `json:"source_account_id,omitempty"`
+	SourceCreditCardID       *uuid.UUID `json:"source_credit_card_id,omitempty"`
+	TargetCategoryID         *uuid.UUID `json:"target_category_id,omitempty"`
+	CleanName                *string    `json:"clean_name,omitempty"`
+	MarkRecurring            *bool      `json:"mark_recurring,omitempty"`
+	MarkReimbursable         *bool      `json:"mark_reimbursable,omitempty"`
+	ReimbursableDebtor       *string    `json:"reimbursable_debtor,omitempty"`
+	MarkIgnoreInConsolidated *bool      `json:"mark_ignore_in_consolidated,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
+	DeletedAt                *time.Time `json:"deleted_at,omitempty"`
+}
+
+// AssetItem represents a non-bank physical or financial asset (real estate, vehicle, FGTS, etc.)
+type AssetItem struct {
+	ID                           uuid.UUID   `json:"id"`
+	UserID                       uuid.UUID   `json:"user_id"`
+	Name                         string      `json:"name"`
+	AssetClass                   string      `json:"asset_class"`
+	PurchaseValue                float64     `json:"purchase_value"`
+	CurrentMarketValue           float64     `json:"current_market_value"`
+	AcquisitionDate              *time.Time  `json:"acquisition_date,omitempty"`
+	LinkedFinancingContractID    *uuid.UUID  `json:"linked_financing_contract_id,omitempty"`
+	AnnualDepreciationRatePercent *float64   `json:"annual_depreciation_rate_percent,omitempty"`
+	MonthlyContributionEstimate  *float64    `json:"monthly_contribution_estimate,omitempty"`
+	CurrencyCode                 string      `json:"currency_code"`
+	ValuationHistory             interface{} `json:"valuation_history,omitempty"`
+	Notes                        string      `json:"notes"`
+	CreatedAt                    time.Time   `json:"created_at"`
+	UpdatedAt                    time.Time   `json:"updated_at"`
+	DeletedAt                    *time.Time  `json:"deleted_at,omitempty"`
+}
+
+// IncomeSource represents a structured recurring/seasonal/passive income stream
+type IncomeSource struct {
+	ID              uuid.UUID  `json:"id"`
+	UserID          uuid.UUID  `json:"user_id"`
+	Name            string     `json:"name"`
+	Kind            string     `json:"kind"`
+	GrossAmount     float64    `json:"gross_amount"`
+	NetAmount       float64    `json:"net_amount"`
+	PaymentDay      *int       `json:"payment_day,omitempty"`
+	ExpectedMonth   *int       `json:"expected_month,omitempty"`
+	Frequency       string     `json:"frequency"`
+	PayerName       string     `json:"payer_name"`
+	LinkedAccountID *uuid.UUID `json:"linked_account_id,omitempty"`
+	CurrencyCode    string     `json:"currency_code"`
+	IsActive        bool       `json:"is_active"`
+	Notes           string     `json:"notes"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
+}
+
+// NetWorthSnapshot records historical monthly Net Worth telemetry
+type NetWorthSnapshot struct {
+	ID                               uuid.UUID  `json:"id"`
+	UserID                           uuid.UUID  `json:"user_id"`
+	YearMonthKey                     int        `json:"year_month_key"`
+	SnapshotDate                     time.Time  `json:"snapshot_date"`
+	LiquidAssetsBRL                  float64    `json:"liquid_assets_brl"`
+	InvestmentsAssetsBRL             float64    `json:"investments_assets_brl"`
+	RealEstateAssetsBRL              float64    `json:"real_estate_assets_brl"`
+	VehicleAssetsBRL                 float64    `json:"vehicle_assets_brl"`
+	FGTSAndOtherAssetsBRL            float64    `json:"fgts_and_other_assets_brl"`
+	TotalAssetsBRL                   float64    `json:"total_assets_brl"`
+	LoansAndFinancingsLiabilitiesBRL float64    `json:"loans_and_financings_liabilities_brl"`
+	CreditCardsLiabilitiesBRL        float64    `json:"credit_cards_liabilities_brl"`
+	DebtsLiabilitiesBRL              float64    `json:"debts_liabilities_brl"`
+	TotalLiabilitiesBRL              float64    `json:"total_liabilities_brl"`
+	NetWorthBRL                      float64    `json:"net_worth_brl"`
+	CreatedAt                        time.Time  `json:"created_at"`
+	UpdatedAt                        time.Time  `json:"updated_at"`
+	DeletedAt                        *time.Time `json:"deleted_at,omitempty"`
+}
+
+// FIREScenario stores a saved financial independence simulation scenario
+type FIREScenario struct {
+	ID                                uuid.UUID  `json:"id"`
+	UserID                            uuid.UUID  `json:"user_id"`
+	Name                              string     `json:"name"`
+	MonthlyCostOfLivingBRL            float64    `json:"monthly_cost_of_living_brl"`
+	CurrentInvestedPatrimonyBRL       float64    `json:"current_invested_patrimony_brl"`
+	IncludeRealEstateAndFGTS          bool       `json:"include_real_estate_and_fgts"`
+	MonthlyContributionBRL            float64    `json:"monthly_contribution_brl"`
+	SafeWithdrawalRatePercent         float64    `json:"safe_withdrawal_rate_percent"`
+	ExpectedAnnualNominalReturnPercent float64   `json:"expected_annual_nominal_return_percent"`
+	ExpectedAnnualInflationPercent    float64    `json:"expected_annual_inflation_percent"`
+	Notes                             string     `json:"notes"`
+	CreatedAt                         time.Time  `json:"created_at"`
+	UpdatedAt                         time.Time  `json:"updated_at"`
+	DeletedAt                         *time.Time `json:"deleted_at,omitempty"`
 }

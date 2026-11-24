@@ -105,9 +105,9 @@ func normalizeEntityData(data map[string]interface{}) map[string]interface{} {
 func entityPriority(entityName string, op models.OperationType) int {
 	if op == models.OpDelete {
 		switch entityName {
-		case "financial_transactions", "amortization_plans":
+		case "financial_transactions", "amortization_plans", "reconciliation_rules", "asset_items":
 			return 1
-		case "credit_card_invoices", "category_quota_rules", "category_provisions", "credit_contracts", "investment_items", "debt_items":
+		case "credit_card_invoices", "category_quota_rules", "category_provisions", "credit_contracts", "investment_items", "debt_items", "income_sources", "net_worth_snapshots", "fire_scenarios":
 			return 2
 		case "credit_cards", "categories":
 			return 3
@@ -124,7 +124,7 @@ func entityPriority(entityName string, op models.OperationType) int {
 			return 2
 		case "credit_card_invoices", "credit_contracts", "investment_items", "debt_items":
 			return 3
-		case "category_provisions", "category_quota_rules", "amortization_plans", "sinking_funds", "what_if_scenarios", "financial_insights", "monthly_reviews", "ml_behavioral_profiles":
+		case "category_provisions", "category_quota_rules", "amortization_plans", "sinking_funds", "what_if_scenarios", "financial_insights", "monthly_reviews", "ml_behavioral_profiles", "reconciliation_rules", "asset_items", "income_sources", "net_worth_snapshots", "fire_scenarios":
 			return 4
 		case "financial_transactions":
 			return 5
@@ -354,6 +354,16 @@ func initEmptyDeltas() map[string]interface{} {
 		"monthlyReviews":         []interface{}{},
 		"ml_behavioral_profiles": []interface{}{},
 		"mlBehavioralProfiles":   []interface{}{},
+		"reconciliation_rules":   []interface{}{},
+		"reconciliationRules":    []interface{}{},
+		"asset_items":            []interface{}{},
+		"assetItems":             []interface{}{},
+		"income_sources":         []interface{}{},
+		"incomeSources":          []interface{}{},
+		"net_worth_snapshots":    []interface{}{},
+		"netWorthSnapshots":      []interface{}{},
+		"fire_scenarios":         []interface{}{},
+		"fireScenarios":          []interface{}{},
 	}
 }
 
@@ -406,6 +416,21 @@ func appendToDeltas(deltas map[string]interface{}, entityName string, data map[s
 	case "ml_behavioral_profiles":
 		deltas["ml_behavioral_profiles"] = append(deltas["ml_behavioral_profiles"].([]interface{}), data)
 		deltas["mlBehavioralProfiles"] = append(deltas["mlBehavioralProfiles"].([]interface{}), data)
+	case "reconciliation_rules":
+		deltas["reconciliation_rules"] = append(deltas["reconciliation_rules"].([]interface{}), data)
+		deltas["reconciliationRules"] = append(deltas["reconciliationRules"].([]interface{}), data)
+	case "asset_items":
+		deltas["asset_items"] = append(deltas["asset_items"].([]interface{}), data)
+		deltas["assetItems"] = append(deltas["assetItems"].([]interface{}), data)
+	case "income_sources":
+		deltas["income_sources"] = append(deltas["income_sources"].([]interface{}), data)
+		deltas["incomeSources"] = append(deltas["incomeSources"].([]interface{}), data)
+	case "net_worth_snapshots":
+		deltas["net_worth_snapshots"] = append(deltas["net_worth_snapshots"].([]interface{}), data)
+		deltas["netWorthSnapshots"] = append(deltas["netWorthSnapshots"].([]interface{}), data)
+	case "fire_scenarios":
+		deltas["fire_scenarios"] = append(deltas["fire_scenarios"].([]interface{}), data)
+		deltas["fireScenarios"] = append(deltas["fireScenarios"].([]interface{}), data)
 	}
 }
 
@@ -434,6 +459,11 @@ func (s *SyncService) GetAllActiveEntities(ctx context.Context, userID uuid.UUID
 		"financial_insights",
 		"monthly_reviews",
 		"ml_behavioral_profiles",
+		"reconciliation_rules",
+		"asset_items",
+		"income_sources",
+		"net_worth_snapshots",
+		"fire_scenarios",
 	}
 
 	var changes []models.Mutation
@@ -740,6 +770,11 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		"financial_insights":     true,
 		"monthly_reviews":        true,
 		"ml_behavioral_profiles": true,
+		"reconciliation_rules":   true,
+		"asset_items":            true,
+		"income_sources":         true,
+		"net_worth_snapshots":    true,
+		"fire_scenarios":         true,
 	}
 	if !validTables[m.EntityName] {
 		return false, nil
@@ -772,9 +807,13 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			createdAt = item.CreatedAt.UTC()
 		}
 
+		if item.CurrencyCode == "" {
+			item.CurrencyCode = "BRL"
+		}
+
 		query := `
-			INSERT INTO bank_accounts (id, user_id, name, bank_preset_id, custom_image_path, icon_symbol, color_hex, initial_balance, agency, account_number, display_order, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			INSERT INTO bank_accounts (id, user_id, name, bank_preset_id, custom_image_path, icon_symbol, color_hex, initial_balance, agency, account_number, display_order, currency_code, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (id) DO UPDATE SET
 				name = EXCLUDED.name,
 				bank_preset_id = EXCLUDED.bank_preset_id,
@@ -785,11 +824,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				agency = EXCLUDED.agency,
 				account_number = EXCLUDED.account_number,
 				display_order = EXCLUDED.display_order,
+				currency_code = EXCLUDED.currency_code,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE bank_accounts.updated_at <= EXCLUDED.updated_at;
 		`
-		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.BankPresetID, item.CustomImagePath, item.IconSymbol, item.ColorHex, item.InitialBalance, item.Agency, item.AccountNumber, item.DisplayOrder, createdAt, effectiveTime)
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.Name, item.BankPresetID, item.CustomImagePath, item.IconSymbol, item.ColorHex, item.InitialBalance, item.Agency, item.AccountNumber, item.DisplayOrder, item.CurrencyCode, createdAt, effectiveTime)
 		if err != nil {
 			return false, err
 		}
@@ -1028,6 +1068,10 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			}
 		}
 
+		if item.CurrencyCode == "" {
+			item.CurrencyCode = "BRL"
+		}
+
 		query := `
 			INSERT INTO financial_transactions (
 				id, user_id, account_id, category_id, name, details, amount, date, type, is_paid,
@@ -1038,9 +1082,12 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				transaction_origin, linked_entity_id,
 				base_installment_registered_amount, projected_installment_correction_amount, confirmed_real_interest_correction_amount,
 				credit_card_id, credit_card_invoice_year_month_key, credit_card_invoice_id,
+				needs_review, source_app, is_reimbursable, reimbursable_debtor, reimbursable_amount,
+				reimbursement_expected_date, reimbursement_received_amount, is_reimbursement_settled,
+				linked_reimbursement_transaction_id, currency_code, exchange_rate_to_brl,
 				created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48)
 			ON CONFLICT (id) DO UPDATE SET
 				account_id = EXCLUDED.account_id,
 				category_id = EXCLUDED.category_id,
@@ -1075,6 +1122,17 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				credit_card_id = EXCLUDED.credit_card_id,
 				credit_card_invoice_year_month_key = EXCLUDED.credit_card_invoice_year_month_key,
 				credit_card_invoice_id = EXCLUDED.credit_card_invoice_id,
+				needs_review = EXCLUDED.needs_review,
+				source_app = EXCLUDED.source_app,
+				is_reimbursable = EXCLUDED.is_reimbursable,
+				reimbursable_debtor = EXCLUDED.reimbursable_debtor,
+				reimbursable_amount = EXCLUDED.reimbursable_amount,
+				reimbursement_expected_date = EXCLUDED.reimbursement_expected_date,
+				reimbursement_received_amount = EXCLUDED.reimbursement_received_amount,
+				is_reimbursement_settled = EXCLUDED.is_reimbursement_settled,
+				linked_reimbursement_transaction_id = EXCLUDED.linked_reimbursement_transaction_id,
+				currency_code = EXCLUDED.currency_code,
+				exchange_rate_to_brl = EXCLUDED.exchange_rate_to_brl,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE financial_transactions.updated_at <= EXCLUDED.updated_at;
@@ -1088,6 +1146,9 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			item.TransactionOrigin, item.LinkedEntityID,
 			item.BaseInstallmentRegisteredAmount, item.ProjectedInstallmentCorrectionAmount, item.ConfirmedRealInterestCorrectionAmount,
 			item.CreditCardID, item.CreditCardInvoiceYearMonthKey, item.CreditCardInvoiceID,
+			item.NeedsReview, item.SourceApp, item.IsReimbursable, item.ReimbursableDebtor, item.ReimbursableAmount,
+			item.ReimbursementExpectedDate, item.ReimbursementReceivedAmount, item.IsReimbursementSettled,
+			item.LinkedReimbursementTransactionID, item.CurrencyCode, item.ExchangeRateToBRL,
 			createdAt, effectiveTime,
 		)
 		if err != nil {
@@ -1169,9 +1230,13 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 			movementsJSON, _ = json.Marshal(item.Movements)
 		}
 
+		if item.CurrencyCode == "" {
+			item.CurrencyCode = "BRL"
+		}
+
 		query := `
-			INSERT INTO investment_items (id, user_id, investment_account_id, name, group_name, balance, show_in_consolidated, icon_symbol, color_hex, notes, movements, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			INSERT INTO investment_items (id, user_id, investment_account_id, name, group_name, balance, show_in_consolidated, icon_symbol, color_hex, notes, currency_code, movements, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (id) DO UPDATE SET
 				investment_account_id = EXCLUDED.investment_account_id,
 				name = EXCLUDED.name,
@@ -1181,12 +1246,13 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				icon_symbol = EXCLUDED.icon_symbol,
 				color_hex = EXCLUDED.color_hex,
 				notes = EXCLUDED.notes,
+				currency_code = EXCLUDED.currency_code,
 				movements = EXCLUDED.movements,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE investment_items.updated_at <= EXCLUDED.updated_at;
 		`
-		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, movementsJSON, createdAt, effectiveTime)
+		tag, err := tx.Exec(ctx, query, item.ID, item.UserID, item.InvestmentAccountID, item.Name, item.GroupName, item.Balance, item.ShowInConsolidated, item.IconSymbol, item.ColorHex, item.Notes, item.CurrencyCode, movementsJSON, createdAt, effectiveTime)
 		if err != nil {
 			return false, err
 		}
@@ -1581,13 +1647,16 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		} else {
 			item.CategoryID = nil
 		}
+		if item.CurrencyCode == "" {
+			item.CurrencyCode = "BRL"
+		}
 		query := `
 			INSERT INTO sinking_funds (
 				id, user_id, name, category_id, icon_symbol, color_hex,
 				target_amount, recurrence_months, due_month, due_year, accumulated_reserve,
-				is_enabled, notes, created_at, updated_at
+				is_enabled, notes, currency_code, created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 			ON CONFLICT (id) DO UPDATE SET
 				name = EXCLUDED.name,
 				category_id = EXCLUDED.category_id,
@@ -1600,6 +1669,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 				accumulated_reserve = EXCLUDED.accumulated_reserve,
 				is_enabled = EXCLUDED.is_enabled,
 				notes = EXCLUDED.notes,
+				currency_code = EXCLUDED.currency_code,
 				updated_at = EXCLUDED.updated_at,
 				deleted_at = NULL
 			WHERE sinking_funds.updated_at <= EXCLUDED.updated_at;
@@ -1607,7 +1677,7 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		tag, err := tx.Exec(ctx, query,
 			item.ID, item.UserID, item.Name, item.CategoryID, item.IconSymbol, item.ColorHex,
 			item.TargetAmount, item.RecurrenceMonths, item.DueMonth, item.DueYear, item.AccumulatedReserve,
-			item.IsEnabled, item.Notes, createdAt, effectiveTime,
+			item.IsEnabled, item.Notes, item.CurrencyCode, createdAt, effectiveTime,
 		)
 		if err != nil {
 			return false, err
@@ -1807,6 +1877,286 @@ func (s *SyncService) applyMutation(ctx context.Context, tx pgx.Tx, userID uuid.
 		}
 		return tag.RowsAffected() > 0, nil
 
+	case "reconciliation_rules":
+		var item models.ReconciliationRule
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.MatchField == "" {
+			item.MatchField = "nameOrDetails"
+		}
+		if item.MatchOperator == "" {
+			item.MatchOperator = "contains"
+		}
+		if item.TargetCategoryID != nil && *item.TargetCategoryID != uuid.Nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM categories WHERE id = $1 AND user_id = $2)", *item.TargetCategoryID, userID).Scan(&exists)
+			if !exists {
+				item.TargetCategoryID = nil
+			}
+		} else {
+			item.TargetCategoryID = nil
+		}
+		query := `
+			INSERT INTO reconciliation_rules (
+				id, user_id, name, priority, is_enabled, match_field, match_operator, match_pattern,
+				min_amount, max_amount, source_account_id, source_credit_card_id, target_category_id,
+				clean_name, mark_recurring, mark_reimbursable, reimbursable_debtor, mark_ignore_in_consolidated,
+				created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				priority = EXCLUDED.priority,
+				is_enabled = EXCLUDED.is_enabled,
+				match_field = EXCLUDED.match_field,
+				match_operator = EXCLUDED.match_operator,
+				match_pattern = EXCLUDED.match_pattern,
+				min_amount = EXCLUDED.min_amount,
+				max_amount = EXCLUDED.max_amount,
+				source_account_id = EXCLUDED.source_account_id,
+				source_credit_card_id = EXCLUDED.source_credit_card_id,
+				target_category_id = EXCLUDED.target_category_id,
+				clean_name = EXCLUDED.clean_name,
+				mark_recurring = EXCLUDED.mark_recurring,
+				mark_reimbursable = EXCLUDED.mark_reimbursable,
+				reimbursable_debtor = EXCLUDED.reimbursable_debtor,
+				mark_ignore_in_consolidated = EXCLUDED.mark_ignore_in_consolidated,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE reconciliation_rules.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.Priority, item.IsEnabled, item.MatchField, item.MatchOperator, item.MatchPattern,
+			item.MinAmount, item.MaxAmount, item.SourceAccountID, item.SourceCreditCardID, item.TargetCategoryID,
+			item.CleanName, item.MarkRecurring, item.MarkReimbursable, item.ReimbursableDebtor, item.MarkIgnoreInConsolidated,
+			createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "asset_items":
+		var item models.AssetItem
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.AssetClass == "" {
+			item.AssetClass = "realEstate"
+		}
+		if item.CurrencyCode == "" {
+			item.CurrencyCode = "BRL"
+		}
+		if item.LinkedFinancingContractID != nil && *item.LinkedFinancingContractID != uuid.Nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM credit_contracts WHERE id = $1 AND user_id = $2)", *item.LinkedFinancingContractID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedFinancingContractID = nil
+			}
+		} else {
+			item.LinkedFinancingContractID = nil
+		}
+		var valuationJSON []byte
+		if item.ValuationHistory != nil {
+			valuationJSON, _ = json.Marshal(item.ValuationHistory)
+		}
+		query := `
+			INSERT INTO asset_items (
+				id, user_id, name, asset_class, purchase_value, current_market_value, acquisition_date,
+				linked_financing_contract_id, annual_depreciation_rate_percent, monthly_contribution_estimate,
+				currency_code, valuation_history, notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				asset_class = EXCLUDED.asset_class,
+				purchase_value = EXCLUDED.purchase_value,
+				current_market_value = EXCLUDED.current_market_value,
+				acquisition_date = EXCLUDED.acquisition_date,
+				linked_financing_contract_id = EXCLUDED.linked_financing_contract_id,
+				annual_depreciation_rate_percent = EXCLUDED.annual_depreciation_rate_percent,
+				monthly_contribution_estimate = EXCLUDED.monthly_contribution_estimate,
+				currency_code = EXCLUDED.currency_code,
+				valuation_history = EXCLUDED.valuation_history,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE asset_items.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.AssetClass, item.PurchaseValue, item.CurrentMarketValue, item.AcquisitionDate,
+			item.LinkedFinancingContractID, item.AnnualDepreciationRatePercent, item.MonthlyContributionEstimate,
+			item.CurrencyCode, valuationJSON, item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "income_sources":
+		var item models.IncomeSource
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		if item.Kind == "" {
+			item.Kind = "fixedSalary"
+		}
+		if item.Frequency == "" {
+			item.Frequency = "monthly"
+		}
+		if item.CurrencyCode == "" {
+			item.CurrencyCode = "BRL"
+		}
+		if item.LinkedAccountID != nil && *item.LinkedAccountID != uuid.Nil {
+			var exists bool
+			_ = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM bank_accounts WHERE id = $1 AND user_id = $2)", *item.LinkedAccountID, userID).Scan(&exists)
+			if !exists {
+				item.LinkedAccountID = nil
+			}
+		} else {
+			item.LinkedAccountID = nil
+		}
+		query := `
+			INSERT INTO income_sources (
+				id, user_id, name, kind, gross_amount, net_amount, payment_day, expected_month,
+				frequency, payer_name, linked_account_id, currency_code, is_active, notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				kind = EXCLUDED.kind,
+				gross_amount = EXCLUDED.gross_amount,
+				net_amount = EXCLUDED.net_amount,
+				payment_day = EXCLUDED.payment_day,
+				expected_month = EXCLUDED.expected_month,
+				frequency = EXCLUDED.frequency,
+				payer_name = EXCLUDED.payer_name,
+				linked_account_id = EXCLUDED.linked_account_id,
+				currency_code = EXCLUDED.currency_code,
+				is_active = EXCLUDED.is_active,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE income_sources.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.Kind, item.GrossAmount, item.NetAmount, item.PaymentDay, item.ExpectedMonth,
+			item.Frequency, item.PayerName, item.LinkedAccountID, item.CurrencyCode, item.IsActive, item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "net_worth_snapshots":
+		var item models.NetWorthSnapshot
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		query := `
+			INSERT INTO net_worth_snapshots (
+				id, user_id, year_month_key, snapshot_date, liquid_assets_brl, investments_assets_brl,
+				real_estate_assets_brl, vehicle_assets_brl, fgts_and_other_assets_brl, total_assets_brl,
+				loans_and_financings_liabilities_brl, credit_cards_liabilities_brl, debts_liabilities_brl,
+				total_liabilities_brl, net_worth_brl, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			ON CONFLICT (id) DO UPDATE SET
+				year_month_key = EXCLUDED.year_month_key,
+				snapshot_date = EXCLUDED.snapshot_date,
+				liquid_assets_brl = EXCLUDED.liquid_assets_brl,
+				investments_assets_brl = EXCLUDED.investments_assets_brl,
+				real_estate_assets_brl = EXCLUDED.real_estate_assets_brl,
+				vehicle_assets_brl = EXCLUDED.vehicle_assets_brl,
+				fgts_and_other_assets_brl = EXCLUDED.fgts_and_other_assets_brl,
+				total_assets_brl = EXCLUDED.total_assets_brl,
+				loans_and_financings_liabilities_brl = EXCLUDED.loans_and_financings_liabilities_brl,
+				credit_cards_liabilities_brl = EXCLUDED.credit_cards_liabilities_brl,
+				debts_liabilities_brl = EXCLUDED.debts_liabilities_brl,
+				total_liabilities_brl = EXCLUDED.total_liabilities_brl,
+				net_worth_brl = EXCLUDED.net_worth_brl,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE net_worth_snapshots.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.YearMonthKey, item.SnapshotDate, item.LiquidAssetsBRL, item.InvestmentsAssetsBRL,
+			item.RealEstateAssetsBRL, item.VehicleAssetsBRL, item.FGTSAndOtherAssetsBRL, item.TotalAssetsBRL,
+			item.LoansAndFinancingsLiabilitiesBRL, item.CreditCardsLiabilitiesBRL, item.DebtsLiabilitiesBRL,
+			item.TotalLiabilitiesBRL, item.NetWorthBRL, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
+	case "fire_scenarios":
+		var item models.FIREScenario
+		if err := json.Unmarshal(jsonBytes, &item); err != nil {
+			return false, err
+		}
+		item.ID = m.EntityID
+		item.UserID = userID
+		createdAt := effectiveTime
+		if !item.CreatedAt.IsZero() {
+			createdAt = item.CreatedAt.UTC()
+		}
+		query := `
+			INSERT INTO fire_scenarios (
+				id, user_id, name, monthly_cost_of_living_brl, current_invested_patrimony_brl,
+				include_real_estate_and_fgts, monthly_contribution_brl, safe_withdrawal_rate_percent,
+				expected_annual_nominal_return_percent, expected_annual_inflation_percent, notes, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				monthly_cost_of_living_brl = EXCLUDED.monthly_cost_of_living_brl,
+				current_invested_patrimony_brl = EXCLUDED.current_invested_patrimony_brl,
+				include_real_estate_and_fgts = EXCLUDED.include_real_estate_and_fgts,
+				monthly_contribution_brl = EXCLUDED.monthly_contribution_brl,
+				safe_withdrawal_rate_percent = EXCLUDED.safe_withdrawal_rate_percent,
+				expected_annual_nominal_return_percent = EXCLUDED.expected_annual_nominal_return_percent,
+				expected_annual_inflation_percent = EXCLUDED.expected_annual_inflation_percent,
+				notes = EXCLUDED.notes,
+				updated_at = EXCLUDED.updated_at,
+				deleted_at = NULL
+			WHERE fire_scenarios.updated_at <= EXCLUDED.updated_at;
+		`
+		tag, err := tx.Exec(ctx, query,
+			item.ID, item.UserID, item.Name, item.MonthlyCostOfLivingBRL, item.CurrentInvestedPatrimonyBRL,
+			item.IncludeRealEstateAndFGTS, item.MonthlyContributionBRL, item.SafeWithdrawalRatePercent,
+			item.ExpectedAnnualNominalReturnPercent, item.ExpectedAnnualInflationPercent, item.Notes, createdAt, effectiveTime,
+		)
+		if err != nil {
+			return false, err
+		}
+		return tag.RowsAffected() > 0, nil
+
 	default:
 		return false, nil
 	}
@@ -1863,6 +2213,11 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 			"financial_insights",
 			"monthly_reviews",
 			"ml_behavioral_profiles",
+			"reconciliation_rules",
+			"asset_items",
+			"income_sources",
+			"net_worth_snapshots",
+			"fire_scenarios",
 			"categories",
 			"bank_accounts",
 			"asset_files",
@@ -1912,6 +2267,18 @@ func (s *SyncService) ResetUserData(ctx context.Context, userID uuid.UUID, targe
 		}
 		if targetSet["insights"] || targetSet["financial_insights"] {
 			tablesToDelete = append(tablesToDelete, "financial_insights", "monthly_reviews", "ml_behavioral_profiles")
+		}
+		if targetSet["reconciliationrules"] || targetSet["reconciliation_rules"] {
+			tablesToDelete = append(tablesToDelete, "reconciliation_rules")
+		}
+		if targetSet["assetitems"] || targetSet["asset_items"] || targetSet["networth"] {
+			tablesToDelete = append(tablesToDelete, "asset_items", "net_worth_snapshots")
+		}
+		if targetSet["incomesources"] || targetSet["income_sources"] {
+			tablesToDelete = append(tablesToDelete, "income_sources")
+		}
+		if targetSet["firescenarios"] || targetSet["fire_scenarios"] {
+			tablesToDelete = append(tablesToDelete, "fire_scenarios")
 		}
 	}
 

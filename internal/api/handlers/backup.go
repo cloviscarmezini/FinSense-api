@@ -33,6 +33,8 @@ func (h *BackupHandler) ExportFull(w http.ResponseWriter, r *http.Request) {
 		"amortization_records", "debt_items", "category_provisions",
 		"category_quota_rules", "sinking_funds", "what_if_scenarios",
 		"financial_insights", "monthly_reviews", "ml_behavioral_profiles",
+		"reconciliation_rules", "asset_items", "income_sources",
+		"net_worth_snapshots", "fire_scenarios",
 	}
 
 	backupData := make(map[string]interface{})
